@@ -1,0 +1,852 @@
+require('dotenv').config();
+const crypto = require('crypto');
+const express = require('express');
+const path = require('path');
+const db = require('./db');
+const { sendSms } = require('./services/sms');
+
+const app = express();
+const PORT = Number(process.env.PORT || 3000);
+const BASE_URL = (process.env.BASE_URL || ('http://localhost:' + PORT)).replace(/\/$/, '');
+const FRONTEND_DIST = path.join(__dirname, '../public/app');
+
+const QUESTION_TYPES = new Set(['text', 'stars', 'single_choice', 'multi_choice', 'number', 'yes_no', 'scale_1_5']);
+
+app.use(express.json());
+app.use(express.static(FRONTEND_DIST));
+app.use(express.static(path.join(__dirname, '../public')));
+
+function requireAdmin(req, res, next) {
+  const key = req.header('x-admin-key');
+  if (!process.env.ADMIN_API_KEY || key !== process.env.ADMIN_API_KEY) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  next();
+}
+
+function generateToken() {
+  return crypto.randomBytes(24).toString('base64url');
+}
+
+function getExpiry() {
+  const ttl = Number(process.env.TOKEN_TTL_HOURS || 48);
+  const d = new Date();
+  d.setHours(d.getHours() + ttl);
+  return d.toISOString();
+}
+
+function textOrEmpty(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function makeId(prefix) {
+  return prefix + '-' + Date.now().toString(36) + '-' + crypto.randomBytes(3).toString('hex');
+}
+
+function slugify(input) {
+  return String(input || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 48);
+}
+
+function normalizeRegistrationBody(body) {
+  if (!body || typeof body !== 'object') return { error: 'invalid_body' };
+
+  const patientInput = body.patient || {};
+  const patientName = textOrEmpty(patientInput.name);
+  if (!patientName) return { error: 'patient_name_required' };
+
+  const patientId = textOrEmpty(patientInput.id) || makeId('P');
+  const visitId = textOrEmpty(body.visit_id) || makeId('V');
+  const phone = textOrEmpty(body.phone || patientInput.phone) || null;
+
+  const doctorsInput = Array.isArray(body.doctors) ? body.doctors : [];
+  if (!doctorsInput.length) return { error: 'at_least_one_doctor_required' };
+
+  const doctorMap = new Map();
+  for (let i = 0; i < doctorsInput.length; i += 1) {
+    const raw = doctorsInput[i] || {};
+    const name = textOrEmpty(raw.name);
+    if (!name) return { error: 'doctor_name_required_at_index_' + i };
+
+    const id = textOrEmpty(raw.id) || makeId('D');
+    if (!doctorMap.has(id)) doctorMap.set(id, { id, name });
+  }
+
+  const doctors = Array.from(doctorMap.values());
+  if (!doctors.length) return { error: 'at_least_one_doctor_required' };
+
+  return {
+    payload: {
+      patient: { id: patientId, name: patientName },
+      doctors,
+      visit_id: visitId
+    },
+    phone
+  };
+}
+
+function normalizeQuestionType(type) {
+  const t = textOrEmpty(type).toLowerCase();
+  if (t === 'scale_1_5') return 'stars';
+  return t;
+}
+
+function normalizeQuestionInput(body) {
+  const label = textOrEmpty(body.label);
+  const type = normalizeQuestionType(body.type);
+  const required = Boolean(body.required);
+  const min = Number.isFinite(Number(body.min)) ? Number(body.min) : null;
+  const max = Number.isFinite(Number(body.max)) ? Number(body.max) : null;
+  const options = Array.isArray(body.options)
+    ? body.options.map(textOrEmpty).filter(Boolean)
+    : typeof body.options_csv === 'string'
+      ? body.options_csv.split(',').map(textOrEmpty).filter(Boolean)
+      : [];
+
+  if (!label) return { error: 'question_label_required' };
+  if (!QUESTION_TYPES.has(type)) return { error: 'invalid_question_type' };
+  if ((type === 'single_choice' || type === 'multi_choice') && options.length === 0) {
+    return { error: 'options_required_for_choice_type' };
+  }
+
+  const key = textOrEmpty(body.key) || slugify(label) || ('question_' + Date.now());
+
+  return {
+    question: {
+      key,
+      label,
+      type,
+      required,
+      options,
+      min_value: min,
+      max_value: max,
+      is_active: body.is_active === undefined ? true : Boolean(body.is_active)
+    }
+  };
+}
+
+function validateQuestionAnswers(questionAnswers, questions) {
+  if (!questionAnswers || typeof questionAnswers !== 'object' || Array.isArray(questionAnswers)) {
+    return { ok: false, error: 'invalid_question_answers' };
+  }
+
+  for (const q of questions) {
+    const qType = normalizeQuestionType(q.type);
+    const hasAnswer = Object.prototype.hasOwnProperty.call(questionAnswers, q.key);
+    const value = questionAnswers[q.key];
+
+    if (q.required && !hasAnswer) return { ok: false, error: 'missing_answer_' + q.key };
+    if (!hasAnswer) continue;
+
+    if (qType === 'text') {
+      if (typeof value !== 'string' || (q.required && !textOrEmpty(value))) {
+        return { ok: false, error: 'invalid_answer_' + q.key };
+      }
+    }
+
+    if (qType === 'stars') {
+      const min = Number.isFinite(Number(q.min_value)) ? Number(q.min_value) : 1;
+      const max = Number.isFinite(Number(q.max_value)) ? Number(q.max_value) : 5;
+      if (!Number.isInteger(value) || value < min || value > max) {
+        return { ok: false, error: 'invalid_answer_' + q.key };
+      }
+    }
+
+    if (qType === 'single_choice') {
+      const opts = Array.isArray(q.options) ? q.options : [];
+      if (typeof value !== 'string' || opts.indexOf(value) === -1) {
+        return { ok: false, error: 'invalid_answer_' + q.key };
+      }
+    }
+
+    if (qType === 'multi_choice') {
+      const opts = Array.isArray(q.options) ? q.options : [];
+      if (!Array.isArray(value) || value.some((v) => typeof v !== 'string' || opts.indexOf(v) === -1)) {
+        return { ok: false, error: 'invalid_answer_' + q.key };
+      }
+      if (q.required && value.length === 0) return { ok: false, error: 'invalid_answer_' + q.key };
+    }
+
+    if (qType === 'number') {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return { ok: false, error: 'invalid_answer_' + q.key };
+      if (q.min_value !== null && q.min_value !== undefined && num < Number(q.min_value)) {
+        return { ok: false, error: 'invalid_answer_' + q.key };
+      }
+      if (q.max_value !== null && q.max_value !== undefined && num > Number(q.max_value)) {
+        return { ok: false, error: 'invalid_answer_' + q.key };
+      }
+    }
+
+    if (qType === 'yes_no') {
+      const normalized = typeof value === 'string' ? value.toLowerCase() : value;
+      if (!(normalized === 'yes' || normalized === 'no' || normalized === true || normalized === false)) {
+        return { ok: false, error: 'invalid_answer_' + q.key };
+      }
+    }
+  }
+
+  return { ok: true };
+}
+
+async function ensureQuestionsTableAndDefaults() {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS survey_questions (
+      id BIGSERIAL PRIMARY KEY,
+      question_key TEXT NOT NULL UNIQUE,
+      label TEXT NOT NULL,
+      type TEXT NOT NULL,
+      required BOOLEAN NOT NULL DEFAULT TRUE,
+      options JSONB NOT NULL DEFAULT '[]'::jsonb,
+      min_value NUMERIC,
+      max_value NUMERIC,
+      order_no INT NOT NULL DEFAULT 0,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  const count = await db.query('SELECT COUNT(*)::int AS c FROM survey_questions WHERE is_deleted = FALSE');
+  if (Number(count.rows[0].c) > 0) return;
+
+  const defaults = [
+    {
+      question_key: 'cleanliness',
+      label: 'How clean was the facility?',
+      type: 'stars',
+      required: true,
+      options: [],
+      min_value: 1,
+      max_value: 5,
+      order_no: 1
+    },
+    {
+      question_key: 'staff_friendliness',
+      label: 'How friendly was the staff?',
+      type: 'stars',
+      required: true,
+      options: [],
+      min_value: 1,
+      max_value: 5,
+      order_no: 2
+    },
+    {
+      question_key: 'wait_time',
+      label: 'How was your waiting time?',
+      type: 'single_choice',
+      required: true,
+      options: ['short', 'acceptable', 'long'],
+      min_value: null,
+      max_value: null,
+      order_no: 3
+    },
+    {
+      question_key: 'recommend',
+      label: 'Would you recommend this clinic to others?',
+      type: 'yes_no',
+      required: true,
+      options: ['yes', 'no'],
+      min_value: null,
+      max_value: null,
+      order_no: 4
+    }
+  ];
+
+  for (const q of defaults) {
+    await db.query(
+      'INSERT INTO survey_questions(question_key, label, type, required, options, min_value, max_value, order_no, is_active, is_deleted) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8,TRUE,FALSE)',
+      [q.question_key, q.label, q.type, q.required, JSON.stringify(q.options), q.min_value, q.max_value, q.order_no]
+    );
+  }
+}
+
+async function fetchQuestions(args) {
+  const includeInactive = args && args.includeInactive;
+  const rows = await db.query(
+    `SELECT id, question_key, label, type, required, options, min_value, max_value, order_no, is_active
+     FROM survey_questions
+     WHERE is_deleted = FALSE ${includeInactive ? '' : 'AND is_active = TRUE'}
+     ORDER BY order_no ASC, id ASC`
+  );
+
+  return rows.rows.map((r) => ({
+    id: Number(r.id),
+    key: r.question_key,
+    label: r.label,
+    type: normalizeQuestionType(r.type),
+    required: Boolean(r.required),
+    options: Array.isArray(r.options) ? r.options : [],
+    min_value: r.min_value === null ? null : Number(r.min_value),
+    max_value: r.max_value === null ? null : Number(r.max_value),
+    order_no: Number(r.order_no),
+    is_active: Boolean(r.is_active)
+  }));
+}
+
+async function upsertVisitGraph(payload) {
+  const client = await db.pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    await client.query(
+      'INSERT INTO patients(id, name) VALUES($1, $2) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name',
+      [payload.patient.id, payload.patient.name]
+    );
+
+    await client.query(
+      'INSERT INTO visits(id, patient_id) VALUES($1, $2) ON CONFLICT (id) DO UPDATE SET patient_id = EXCLUDED.patient_id',
+      [payload.visit_id, payload.patient.id]
+    );
+
+    for (const doctor of payload.doctors) {
+      await client.query(
+        'INSERT INTO doctors(id, name) VALUES($1, $2) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name',
+        [doctor.id, doctor.name]
+      );
+
+      await client.query(
+        'INSERT INTO visit_doctors(visit_id, doctor_id) VALUES($1, $2) ON CONFLICT (visit_id, doctor_id) DO NOTHING',
+        [payload.visit_id, doctor.id]
+      );
+    }
+
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+async function createTokenRecord(args) {
+  const token = generateToken();
+  const expiresAt = getExpiry();
+  const maxUses = Number(process.env.TOKEN_MAX_USES || 1);
+
+  const client = await db.pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    await client.query(
+      'INSERT INTO survey_tokens(token, visit_id, patient_id, phone, expires_at, max_uses, used_count) VALUES($1, $2, $3, $4, $5, $6, 0)',
+      [token, args.visitId, args.patientId, args.phone || null, expiresAt, maxUses]
+    );
+
+    for (const doctorId of args.doctorIds) {
+      await client.query('INSERT INTO token_doctors(token, doctor_id) VALUES($1, $2)', [token, doctorId]);
+    }
+
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+
+  return { token, expiresAt, maxUses };
+}
+
+async function validateToken(token) {
+  const base = await db.query(
+    'SELECT st.token, st.visit_id, st.patient_id, st.expires_at, st.max_uses, st.used_count, p.name AS patient_name FROM survey_tokens st JOIN patients p ON p.id = st.patient_id WHERE st.token = $1',
+    [token]
+  );
+
+  if (!base.rowCount) return { error: 'invalid_token' };
+  const rec = base.rows[0];
+
+  if (new Date(rec.expires_at) < new Date()) return { error: 'expired_token' };
+  if (Number(rec.used_count) >= Number(rec.max_uses)) return { error: 'used_token' };
+
+  const doctors = await db.query(
+    'SELECT d.id, d.name FROM token_doctors td JOIN doctors d ON d.id = td.doctor_id WHERE td.token = $1 ORDER BY d.name ASC',
+    [token]
+  );
+
+  return {
+    token: rec.token,
+    visit_id: rec.visit_id,
+    patient_id: rec.patient_id,
+    patient_name: rec.patient_name,
+    doctors: doctors.rows
+  };
+}
+
+async function issueSurveyFromPayload(payload, phone) {
+  await upsertVisitGraph(payload);
+
+  const tokenInfo = await createTokenRecord({
+    visitId: payload.visit_id,
+    patientId: payload.patient.id,
+    doctorIds: payload.doctors.map(function (d) { return d.id; }),
+    phone
+  });
+
+  const link = BASE_URL + '/survey?t=' + encodeURIComponent(tokenInfo.token);
+
+  return {
+    token: tokenInfo.token,
+    link,
+    expires_at: tokenInfo.expiresAt,
+    max_uses: tokenInfo.maxUses
+  };
+}
+
+app.get('/health', function (_req, res) {
+  res.json({ ok: true });
+});
+
+app.post('/api/patients/upsert', async function (req, res) {
+  try {
+    const id = textOrEmpty(req.body.id) || makeId('P');
+    const name = textOrEmpty(req.body.name);
+    if (!name) return res.status(400).json({ error: 'patient_name_required' });
+
+    const row = await db.query(
+      'INSERT INTO patients(id, name) VALUES($1, $2) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name RETURNING id, name',
+      [id, name]
+    );
+
+    return res.json({ patient: row.rows[0] });
+  } catch (e) {
+    return res.status(500).json({ error: 'patient_upsert_failed', details: e.message });
+  }
+});
+
+app.post('/api/doctors/upsert', async function (req, res) {
+  try {
+    const id = textOrEmpty(req.body.id) || makeId('D');
+    const name = textOrEmpty(req.body.name);
+    if (!name) return res.status(400).json({ error: 'doctor_name_required' });
+
+    const row = await db.query(
+      'INSERT INTO doctors(id, name) VALUES($1, $2) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name RETURNING id, name',
+      [id, name]
+    );
+
+    return res.json({ doctor: row.rows[0] });
+  } catch (e) {
+    return res.status(500).json({ error: 'doctor_upsert_failed', details: e.message });
+  }
+});
+
+app.get('/api/patients', async function (req, res) {
+  try {
+    const q = '%' + textOrEmpty(req.query.q || '') + '%';
+    const rows = await db.query(
+      'SELECT id, name FROM patients WHERE ($1 = \'%%\' OR name ILIKE $1 OR id ILIKE $1) ORDER BY name ASC LIMIT 200',
+      [q]
+    );
+    return res.json({ count: rows.rowCount, patients: rows.rows });
+  } catch (e) {
+    return res.status(500).json({ error: 'patients_list_failed', details: e.message });
+  }
+});
+
+app.get('/api/doctors', async function (req, res) {
+  try {
+    const q = '%' + textOrEmpty(req.query.q || '') + '%';
+    const rows = await db.query(
+      'SELECT id, name FROM doctors WHERE ($1 = \'%%\' OR name ILIKE $1 OR id ILIKE $1) ORDER BY name ASC LIMIT 200',
+      [q]
+    );
+    return res.json({ count: rows.rowCount, doctors: rows.rows });
+  } catch (e) {
+    return res.status(500).json({ error: 'doctors_list_failed', details: e.message });
+  }
+});
+
+app.get('/api/visits/:visitId', async function (req, res) {
+  try {
+    const visitId = req.params.visitId;
+
+    const visit = await db.query(
+      'SELECT v.id AS visit_id, v.created_at, p.id AS patient_id, p.name AS patient_name FROM visits v JOIN patients p ON p.id = v.patient_id WHERE v.id = $1',
+      [visitId]
+    );
+
+    if (!visit.rowCount) return res.status(404).json({ error: 'visit_not_found' });
+
+    const doctors = await db.query(
+      'SELECT d.id, d.name FROM visit_doctors vd JOIN doctors d ON d.id = vd.doctor_id WHERE vd.visit_id = $1 ORDER BY d.name ASC',
+      [visitId]
+    );
+
+    return res.json({ visit: visit.rows[0], doctors: doctors.rows });
+  } catch (e) {
+    return res.status(500).json({ error: 'visit_fetch_failed', details: e.message });
+  }
+});
+
+app.post('/api/register/visit', async function (req, res) {
+  try {
+    const normalized = normalizeRegistrationBody(req.body);
+    if (normalized.error) return res.status(400).json({ error: normalized.error });
+
+    const payload = normalized.payload;
+    const out = await issueSurveyFromPayload(payload, normalized.phone);
+
+    let sms = { ok: false, skipped: true, reason: 'no_phone_provided' };
+    if (normalized.phone) {
+      sms = await sendSms({ to: normalized.phone, message: 'Please provide feedback: ' + out.link });
+    }
+
+    return res.json({
+      ...out,
+      visit: {
+        visit_id: payload.visit_id,
+        patient: payload.patient,
+        doctors: payload.doctors
+      },
+      sms
+    });
+  } catch (e) {
+    return res.status(500).json({ error: 'register_visit_failed', details: e.message });
+  }
+});
+
+app.get('/api/external/test', async function (req, res) {
+  try {
+    const visitId = textOrEmpty(req.query.visit_id);
+    if (!visitId) return res.status(400).json({ error: 'visit_id_required' });
+
+    const extBase = (process.env.EXTERNAL_API_URL || 'http://localhost:3002/source/external/visit-by-visit').replace(/\/$/, '');
+    const url = extBase + '/' + encodeURIComponent(visitId);
+
+    const extRes = await fetch(url);
+    const bodyText = await extRes.text();
+
+    let parsed;
+    try {
+      parsed = JSON.parse(bodyText);
+    } catch (_e) {
+      parsed = bodyText;
+    }
+
+    return res.status(extRes.ok ? 200 : 502).json({
+      connected: extRes.ok,
+      status: extRes.status,
+      request_url: url,
+      data: parsed
+    });
+  } catch (e) {
+    return res.status(500).json({ error: 'external_test_failed', details: e.message });
+  }
+});
+
+app.post('/api/visits/sync', async function (req, res) {
+  try {
+    const visitId = textOrEmpty(req.body.visit_id);
+    const phone = textOrEmpty(req.body.phone) || null;
+
+    if (!visitId) return res.status(400).json({ error: 'visit_id_required' });
+
+    const extBase = (process.env.EXTERNAL_API_URL || 'http://localhost:3002/source/external/visit-by-visit').replace(/\/$/, '');
+    const extRes = await fetch(extBase + '/' + encodeURIComponent(visitId));
+
+    if (!extRes.ok) {
+      const body = await extRes.text();
+      return res.status(502).json({ error: 'external_api_failed', details: body });
+    }
+
+    const payload = await extRes.json();
+    if (!payload.patient || !Array.isArray(payload.doctors) || !payload.visit_id) {
+      return res.status(502).json({ error: 'invalid_external_payload' });
+    }
+
+    const out = await issueSurveyFromPayload(payload, phone);
+    const smsResult = phone
+      ? await sendSms({ to: phone, message: 'Please provide feedback: ' + out.link })
+      : { ok: false, skipped: true, reason: 'no_phone_provided' };
+
+    return res.json({ ...out, sms: smsResult });
+  } catch (e) {
+    return res.status(500).json({ error: 'sync_failed', details: e.message });
+  }
+});
+
+app.get('/api/questions', requireAdmin, async function (req, res) {
+  try {
+    await ensureQuestionsTableAndDefaults();
+    const includeInactive = String(req.query.all || '').toLowerCase() === 'true';
+    const questions = await fetchQuestions({ includeInactive });
+    return res.json({ count: questions.length, questions });
+  } catch (e) {
+    return res.status(500).json({ error: 'questions_fetch_failed', details: e.message });
+  }
+});
+
+app.post('/api/questions', requireAdmin, async function (req, res) {
+  try {
+    await ensureQuestionsTableAndDefaults();
+    const normalized = normalizeQuestionInput(req.body);
+    if (normalized.error) return res.status(400).json({ error: normalized.error });
+
+    const q = normalized.question;
+    const orderNo = Number.isInteger(req.body.order_no)
+      ? req.body.order_no
+      : (await db.query('SELECT COALESCE(MAX(order_no), 0) + 1 AS next_order FROM survey_questions WHERE is_deleted = FALSE')).rows[0].next_order;
+
+    const inserted = await db.query(
+      'INSERT INTO survey_questions(question_key, label, type, required, options, min_value, max_value, order_no, is_active, is_deleted) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,FALSE) RETURNING id, question_key, label, type, required, options, min_value, max_value, order_no, is_active',
+      [q.key, q.label, q.type, q.required, JSON.stringify(q.options), q.min_value, q.max_value, orderNo, q.is_active]
+    );
+
+    return res.json({ question: inserted.rows[0] });
+  } catch (e) {
+    if (String(e.message || '').toLowerCase().includes('unique')) {
+      return res.status(400).json({ error: 'question_key_already_exists' });
+    }
+    return res.status(500).json({ error: 'question_create_failed', details: e.message });
+  }
+});
+
+app.patch('/api/questions/:id', requireAdmin, async function (req, res) {
+  try {
+    await ensureQuestionsTableAndDefaults();
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'invalid_question_id' });
+
+    const current = await db.query('SELECT * FROM survey_questions WHERE id = $1 AND is_deleted = FALSE', [id]);
+    if (!current.rowCount) return res.status(404).json({ error: 'question_not_found' });
+
+    const source = current.rows[0];
+    const merged = {
+      key: textOrEmpty(req.body.key) || source.question_key,
+      label: textOrEmpty(req.body.label) || source.label,
+      type: normalizeQuestionType(req.body.type || source.type),
+      required: req.body.required === undefined ? source.required : Boolean(req.body.required),
+      options: Array.isArray(req.body.options)
+        ? req.body.options.map(textOrEmpty).filter(Boolean)
+        : source.options,
+      min_value: req.body.min === undefined ? source.min_value : Number(req.body.min),
+      max_value: req.body.max === undefined ? source.max_value : Number(req.body.max),
+      order_no: req.body.order_no === undefined ? source.order_no : Number(req.body.order_no),
+      is_active: req.body.is_active === undefined ? source.is_active : Boolean(req.body.is_active)
+    };
+
+    if (!QUESTION_TYPES.has(merged.type)) return res.status(400).json({ error: 'invalid_question_type' });
+    if ((merged.type === 'single_choice' || merged.type === 'multi_choice') && (!Array.isArray(merged.options) || merged.options.length === 0)) {
+      return res.status(400).json({ error: 'options_required_for_choice_type' });
+    }
+
+    const updated = await db.query(
+      'UPDATE survey_questions SET question_key=$1,label=$2,type=$3,required=$4,options=$5::jsonb,min_value=$6,max_value=$7,order_no=$8,is_active=$9,updated_at=NOW() WHERE id=$10 RETURNING id, question_key, label, type, required, options, min_value, max_value, order_no, is_active',
+      [merged.key, merged.label, merged.type, merged.required, JSON.stringify(merged.options || []), merged.min_value, merged.max_value, merged.order_no, merged.is_active, id]
+    );
+
+    return res.json({ question: updated.rows[0] });
+  } catch (e) {
+    if (String(e.message || '').toLowerCase().includes('unique')) {
+      return res.status(400).json({ error: 'question_key_already_exists' });
+    }
+    return res.status(500).json({ error: 'question_update_failed', details: e.message });
+  }
+});
+
+app.delete('/api/questions/:id', requireAdmin, async function (req, res) {
+  try {
+    await ensureQuestionsTableAndDefaults();
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'invalid_question_id' });
+
+    const out = await db.query(
+      'UPDATE survey_questions SET is_deleted = TRUE, updated_at = NOW() WHERE id = $1 AND is_deleted = FALSE RETURNING id',
+      [id]
+    );
+
+    if (!out.rowCount) return res.status(404).json({ error: 'question_not_found' });
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ error: 'question_delete_failed', details: e.message });
+  }
+});
+
+app.post('/api/questions/reorder', requireAdmin, async function (req, res) {
+  try {
+    await ensureQuestionsTableAndDefaults();
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.map((x) => Number(x)).filter((x) => Number.isInteger(x) && x > 0) : [];
+    if (!ids.length) return res.status(400).json({ error: 'ids_required' });
+
+    const client = await db.pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (let i = 0; i < ids.length; i += 1) {
+        await client.query('UPDATE survey_questions SET order_no=$1, updated_at=NOW() WHERE id=$2 AND is_deleted=FALSE', [i + 1, ids[i]]);
+      }
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ error: 'questions_reorder_failed', details: e.message });
+  }
+});
+
+app.get('/api/survey', async function (req, res) {
+  const token = req.query.token || req.query.t;
+  if (!token) return res.status(400).json({ error: 'token_required' });
+
+  const survey = await validateToken(token);
+  if (survey.error) return res.status(400).json({ error: survey.error });
+
+  await ensureQuestionsTableAndDefaults();
+  const questions = await fetchQuestions({ includeInactive: false });
+
+  return res.json({
+    patient_name: survey.patient_name,
+    doctors: survey.doctors,
+    questions: questions.map((q) => ({
+      id: q.key,
+      type: q.type,
+      label: q.label,
+      required: q.required,
+      options: q.options,
+      min: q.min_value,
+      max: q.max_value
+    }))
+  });
+});
+
+app.post('/api/feedback', async function (req, res) {
+  try {
+    const token = req.body.token;
+    const ratings = req.body.ratings;
+    const comment = req.body.comment;
+    const questionAnswers = req.body.question_answers || {};
+
+    if (!token) return res.status(400).json({ error: 'token_required' });
+
+    const survey = await validateToken(token);
+    if (survey.error) return res.status(400).json({ error: survey.error });
+
+    const allowedIds = new Set(survey.doctors.map((d) => d.id));
+
+    if (!Array.isArray(ratings) || ratings.length !== survey.doctors.length) {
+      return res.status(400).json({ error: 'all_doctors_must_be_rated' });
+    }
+
+    for (const item of ratings) {
+      if (!allowedIds.has(item.doctor_id)) return res.status(400).json({ error: 'invalid_doctor' });
+      if (!Number.isInteger(item.rating) || item.rating < 1 || item.rating > 5) {
+        return res.status(400).json({ error: 'invalid_rating_value' });
+      }
+    }
+
+    await ensureQuestionsTableAndDefaults();
+    const questions = await fetchQuestions({ includeInactive: false });
+    const qValidation = validateQuestionAnswers(questionAnswers, questions);
+    if (!qValidation.ok) return res.status(400).json({ error: qValidation.error });
+
+    const client = await db.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const sub = await client.query(
+        'INSERT INTO feedback_submissions(token, visit_id, patient_id, comment, question_answers) VALUES($1, $2, $3, $4, $5::jsonb) RETURNING id',
+        [token, survey.visit_id, survey.patient_id, comment || null, JSON.stringify(questionAnswers)]
+      );
+
+      const submissionId = sub.rows[0].id;
+
+      for (const item of ratings) {
+        await client.query('INSERT INTO feedback_ratings(submission_id, doctor_id, rating) VALUES($1, $2, $3)', [submissionId, item.doctor_id, item.rating]);
+      }
+
+      await client.query('UPDATE survey_tokens SET used_count = used_count + 1 WHERE token = $1', [token]);
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ error: 'feedback_failed', details: e.message });
+  }
+});
+
+app.get('/api/responses', requireAdmin, async function (req, res) {
+  const grouped = String(req.query.grouped || '').toLowerCase() === 'true';
+
+  if (!grouped) {
+    const rows = await db.query(
+      'SELECT fs.id AS submission_id, fs.submitted_at, fs.visit_id, p.name AS patient_name, d.name AS doctor_name, fr.rating, fs.comment, fs.question_answers FROM feedback_submissions fs JOIN patients p ON p.id = fs.patient_id JOIN feedback_ratings fr ON fr.submission_id = fs.id JOIN doctors d ON d.id = fr.doctor_id ORDER BY fs.submitted_at DESC, fs.id DESC, d.name ASC'
+    );
+    return res.json({ count: rows.rowCount, responses: rows.rows });
+  }
+
+  const rows = await db.query(
+    'SELECT fs.id AS submission_id, fs.submitted_at, fs.visit_id, p.name AS patient_name, fs.comment, fs.question_answers, d.id AS doctor_id, d.name AS doctor_name, fr.rating FROM feedback_submissions fs JOIN patients p ON p.id = fs.patient_id JOIN feedback_ratings fr ON fr.submission_id = fs.id JOIN doctors d ON d.id = fr.doctor_id ORDER BY fs.submitted_at DESC, fs.id DESC, d.name ASC'
+  );
+
+  const map = new Map();
+  for (const row of rows.rows) {
+    if (!map.has(row.submission_id)) {
+      map.set(row.submission_id, {
+        submission_id: row.submission_id,
+        submitted_at: row.submitted_at,
+        visit_id: row.visit_id,
+        patient_name: row.patient_name,
+        comment: row.comment,
+        question_answers: row.question_answers || {},
+        ratings: []
+      });
+    }
+
+    map.get(row.submission_id).ratings.push({
+      doctor_id: row.doctor_id,
+      doctor_name: row.doctor_name,
+      rating: Number(row.rating)
+    });
+  }
+
+  return res.json({ count: map.size, responses: Array.from(map.values()) });
+});
+
+app.get('/api/analytics', requireAdmin, async function (_req, res) {
+  const doctorAverages = await db.query(
+    'SELECT d.id AS doctor_id, d.name AS doctor_name, ROUND(AVG(fr.rating)::numeric, 2) AS avg_rating, COUNT(*)::int AS rating_count FROM feedback_ratings fr JOIN doctors d ON d.id = fr.doctor_id GROUP BY d.id, d.name ORDER BY avg_rating DESC, rating_count DESC, d.name ASC'
+  );
+
+  const totals = await db.query('SELECT COUNT(*)::int AS total_submissions FROM feedback_submissions');
+
+  return res.json({
+    total_submissions: totals.rows[0] ? totals.rows[0].total_submissions : 0,
+    doctor_averages: doctorAverages.rows
+  });
+});
+
+app.get('/survey', function (_req, res) {
+  res.sendFile(path.join(FRONTEND_DIST, 'index.html'));
+});
+
+app.get('/admin', function (_req, res) {
+  res.sendFile(path.join(FRONTEND_DIST, 'index.html'));
+});
+
+async function boot() {
+  await ensureQuestionsTableAndDefaults();
+  app.listen(PORT, function () {
+    console.log('Server running at ' + BASE_URL);
+  });
+}
+
+boot().catch((e) => {
+  console.error('Boot failed:', e);
+  process.exit(1);
+});

@@ -1,0 +1,26 @@
+{
+  "name": "abg-survey-backend",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js",
+    "dev:source-api": "nodemon src/source-api-server.js",
+    "start:source-api": "node src/source-api-server.js",
+    "client:dev": "npm --prefix frontend run dev",
+    "client:build": "npm --prefix frontend run build",
+    "build": "npm run client:build"
+  },
+  "dependencies": {
+    "dotenv": "^16.5.0",
+    "express": "^4.21.2",
+    "nodemailer": "^8.0.4",
+    "pdfkit": "^0.18.0",
+    "pg": "^8.12.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
+  }
+}
