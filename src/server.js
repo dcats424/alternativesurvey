@@ -1281,23 +1281,52 @@ app.post('/api/doctor-ratings/send-email', requireAuth, async function (req, res
     const total = Number(total_patients || total_ratings || 0);
     
     const getRatingStatus = () => {
-      if (rating >= 4.5) return { text: 'Excellent', label: 'Outstanding performance', color: '#059669' };
-      if (rating >= 4.0) return { text: 'Very Good', label: 'Strong performance', color: '#059669' };
-      if (rating >= 3.5) return { text: 'Good', label: 'Good performance', color: '#2563eb' };
-      if (rating >= 3.0) return { text: 'Average', label: 'Moderate performance', color: '#d97706' };
-      if (rating >= 2.0) return { text: 'Below Average', label: 'Needs improvement', color: '#ea580c' };
-      return { text: 'Poor', label: 'Requires urgent attention', color: '#dc2626' };
+      if (rating >= 4.5) return 'Excellent';
+      if (rating >= 4.0) return 'Very Good';
+      if (rating >= 3.5) return 'Good';
+      if (rating >= 3.0) return 'Average';
+      if (rating >= 2.0) return 'Below Average';
+      return 'Poor';
     };
     
     const getFeedbackMessage = () => {
+      let strengths = [];
+      let improvements = [];
+      
+      if (Array.isArray(question_ratings) && question_ratings.length > 0) {
+        for (const qr of question_ratings) {
+          const avg = Number(qr.average) || 0;
+          const questionName = qr.question_key || 'Rating';
+          
+          if (qr.type === 'yes_no') {
+            const yesCount = qr.yes_count || 0;
+            const noCount = qr.no_count || 0;
+            const yesPct = (yesCount + noCount) > 0 ? Math.round((yesCount / (yesCount + noCount)) * 100) : 0;
+            if (yesPct >= 80) {
+              strengths.push(questionName);
+            } else if (yesPct < 50) {
+              improvements.push(questionName);
+            }
+          } else {
+            if (avg >= 4.0) {
+              strengths.push(questionName);
+            } else if (avg < 3.0) {
+              improvements.push(questionName);
+            }
+          }
+        }
+      }
+      
       if (rating >= 4.0) {
-        return 'Outstanding performance! Patients consistently rate you at the highest levels across all aspects of care. Your dedication to patient satisfaction is evident. Continue providing this exceptional level of care.';
+        return 'Your overall performance is rated as Excellent. Patients consistently rate you at the highest levels across all aspects of care. Your dedication to patient satisfaction is evident. Continue providing this exceptional level of care.';
+      } else if (rating >= 3.5 && improvements.length > 0) {
+        return `Your overall performance is rated as Good. Patients appreciate your care and service.\n\nAreas where you excel: ${strengths.join(', ')}.\n\nAreas for improvement: ${improvements.join(', ')}. Focusing on these areas could help enhance overall patient satisfaction even more.`;
       } else if (rating >= 3.5) {
-        return 'Good performance. Patients appreciate your care and service. While you are performing well, there are specific areas where focused improvement could elevate patient satisfaction even further.';
+        return 'Your overall performance is rated as Good. Patients appreciate the care and service you provide. Your professionalism and communication were positively recognized.\n\nThere are opportunities for further improvement in areas such as quality of care experience and time & attention, which could help enhance overall patient satisfaction even more.';
       } else if (rating >= 3.0) {
-        return 'Average performance indicates that there is room for improvement. Consider reviewing the detailed feedback to identify specific areas where you can enhance patient experience.';
+        return `Your overall performance is rated as Average. ${improvements.length > 0 ? `Specific areas needing attention: ${improvements.join(', ')}.` : 'Consider reviewing the detailed feedback to identify specific areas where you can enhance patient experience.'}`;
       } else {
-        return 'Below average ratings suggest that improvements are needed. We recommend reviewing the feedback carefully and working with your supervisors to develop an improvement plan.';
+        return `Your overall performance needs improvement. We recommend focusing on: ${improvements.length > 0 ? improvements.join(', ') : 'all aspects of patient care'}. Please review the detailed feedback carefully and work with your supervisors to develop an improvement plan.`;
       }
     };
     
@@ -1309,175 +1338,49 @@ app.post('/api/doctor-ratings/send-email', requireAuth, async function (req, res
       return `${d}/${m}/${y}`;
     };
 
-    const starIcons = Array.from({length: 5}, (_, i) => i < Math.round(rating) ? '★' : '☆').join('');
+    let categoryRatingsText = '';
+    if (Array.isArray(question_ratings) && question_ratings.length > 0) {
+      const categoryLines = question_ratings.map(qr => {
+        const questionName = qr.question_key || 'Rating';
+        const yesCount = qr.yes_count || 0;
+        const noCount = qr.no_count || 0;
+        const avg = Number(qr.average).toFixed(1);
+        
+        if (qr.type === 'yes_no') {
+          const yesPct = (yesCount + noCount) > 0 ? Math.round((yesCount / (yesCount + noCount)) * 100) : 0;
+          return `* ${questionName}: ${yesPct}% Positive Response (${yesCount} Yes / ${noCount} No)`;
+        }
+        return `* ${questionName}: ${avg} / 5.0`;
+      });
+      categoryRatingsText = categoryLines.join('\n');
+    }
 
-    const questionRatingsHtml = Array.isArray(question_ratings) && question_ratings.length > 0
-      ? question_ratings.map(qr => {
-          const pct = (Number(qr.average) / 5) * 100;
-          const barColor = qr.average >= 4.5 ? '#10b981' : qr.average >= 4.0 ? '#10b981' : qr.average >= 3.5 ? '#3b82f6' : qr.average >= 3.0 ? '#3b82f6' : qr.average >= 2.0 ? '#f59e0b' : '#ef4444';
-          const questionName = qr.question_key || 'Rating';
-          const yesCount = qr.yes_count || 0;
-          const noCount = qr.no_count || 0;
-          const avg = Number(qr.average).toFixed(1);
-          const qrStars = Array.from({length: 5}, (_, i) => i < Math.round(qr.average) ? '★' : '☆').join('');
-          
-          if (qr.type === 'yes_no') {
-            return `
-              <div style="background: #f9fafb; border-radius: 12px; padding: 20px; margin-bottom: 16px; border: 1px solid #f3f4f6;">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                  <div style="flex: 1;">
-                    <p style="font-weight: 600; color: #1f2937; margin: 0; font-size: 18px;">${questionName}</p>
-                    <div style="display: flex; gap: 16px; margin-top: 8px;">
-                      <span style="font-size: 14px; color: #059669; font-weight: 500;">Yes: ${yesCount}</span>
-                      <span style="font-size: 14px; color: #dc2626; font-weight: 500;">No: ${noCount}</span>
-                    </div>
-                    <p style="font-size: 14px; color: #6b7280; margin: 4px 0 0 0;">${qr.count} patient${qr.count !== 1 ? 's' : ''} rated this aspect</p>
-                  </div>
-                  <div style="text-align: right;">
-                    <span style="font-size: 36px; font-weight: 700; color: #1f2937;">${yesCount}</span>
-                    <p style="font-size: 12px; color: #6b7280; margin: 4px 0 0 0;">Yes answers</p>
-                  </div>
-                </div>
-              </div>
-            `;
-          }
-          
-          return `
-            <div style="background: #f9fafb; border-radius: 12px; padding: 20px; margin-bottom: 16px; border: 1px solid #f3f4f6;">
-              <div style="display: flex; justify-content: space-between; align-items: center;">
-                <div style="flex: 1;">
-                  <p style="font-weight: 600; color: #1f2937; margin: 0; font-size: 18px;">${questionName}</p>
-                  <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px;">
-                    <span style="color: #f59e0b; font-size: 16px;">${qrStars}</span>
-                    <span style="font-size: 14px; color: #6b7280;">(${avg} / 5.0)</span>
-                  </div>
-                  <p style="font-size: 14px; color: #6b7280; margin: 4px 0 0 0;">${qr.count} patient${qr.count !== 1 ? 's' : ''} rated this aspect</p>
-                </div>
-                <div style="text-align: right;">
-                  <span style="font-size: 36px; font-weight: 700; color: #1f2937;">${avg}</span>
-                  <div style="text-align: center; margin-top: 4px;">
-                    <span style="color: #f59e0b; font-size: 14px;">${qrStars}</span>
-                    <p style="font-size: 12px; color: #6b7280; margin: 4px 0 0 0;">out of 5</p>
-                  </div>
-                </div>
-              </div>
-              <div style="margin-top: 12px;">
-                <div style="background: #e5e7eb; border-radius: 9999px; height: 12px; width: 100%;">
-                  <div style="background: ${barColor}; height: 12px; border-radius: 9999px; width: ${pct}%;"></div>
-                </div>
-              </div>
-            </div>
-          `;
-        }).join('')
-      : '';
+    const message = `Dear ${doctor_name},
 
-    const html = `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f3f4f6;">
-  <div style="max-width: 700px; margin: 20px auto; background: white; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
-    
-    <!-- Header -->
-    <div style="background: linear-gradient(to right, #2563eb, #4f46e5); padding: 24px 32px; color: white;">
-      <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-        <div>
-          <h1 style="margin: 0; font-size: 24px; font-weight: 700;">Patient Feedback Report</h1>
-          <p style="margin: 4px 0 0 0; color: #bfdbfe; font-size: 14px;">Confidential - For Doctor's Review</p>
-        </div>
-        <div style="text-align: right;">
-          <p style="margin: 0; font-size: 12px; color: #bfdbfe;">Report Period</p>
-          <p style="margin: 2px 0 0 0; font-weight: 600; font-size: 14px;">${formatDate(date_from)} - ${formatDate(date_to)}</p>
-        </div>
-      </div>
-    </div>
-    
-    <!-- Doctor Info -->
-    <div style="padding: 32px; border-bottom: 1px solid #e5e7eb;">
-      <div style="display: flex; align-items: center; gap: 16px;">
-        <div style="width: 64px; height: 64px; background: linear-gradient(135deg, #3b82f6, #6366f1); border-radius: 16px; display: flex; align-items: center; justify-content: center; color: white; font-size: 28px; font-weight: 700;">
-          ${(doctor_name || 'D').charAt(0)}
-        </div>
-        <div>
-          <h2 style="margin: 0; font-size: 24px; font-weight: 700; color: #1f2937;">${doctor_name}</h2>
-          <p style="margin: 4px 0 0 0; color: #6b7280; font-size: 14px;">Doctor ID: ${doctor_id || 'N/A'} | Department: ${department || 'General'}</p>
-        </div>
-      </div>
-    </div>
-    
-    <!-- Summary -->
-    <div style="padding: 32px; background: #f9fafb;">
-      <p style="color: #4b5563; line-height: 1.8; margin: 0;">
-        Dear <strong style="color: #1f2937;">${doctor_name}</strong>,
-      </p>
-      <p style="color: #4b5563; line-height: 1.8; margin: 12px 0 0 0;">
-        We are pleased to present your patient feedback report for the period of <strong style="color: #1f2937;">${formatDate(date_from)}</strong> to <strong style="color: #1f2937;">${formatDate(date_to)}</strong>. 
-        This report summarizes the feedback collected from <strong style="color: #1f2937;">${total} patient${total !== 1 ? 's' : ''}</strong> who completed our patient satisfaction survey during their visit.
-      </p>
-    </div>
-    
-    <!-- Main Rating -->
-    <div style="padding: 32px;">
-      <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px;">
-        <div>
-          <p style="margin: 0; color: #6b7280; font-size: 14px; text-transform: uppercase; letter-spacing: 1px;">Overall Rating</p>
-          <div style="display: flex; align-items: baseline; gap: 8px; margin-top: 4px;">
-            <span style="font-size: 56px; font-weight: 700; color: #1f2937;">${rating.toFixed(1)}</span>
-            <span style="font-size: 20px; color: #9ca3af;">/ 5.0</span>
-          </div>
-          <div style="margin-top: 8px;">
-            <span style="color: #f59e0b; font-size: 20px;">${starIcons}</span>
-          </div>
-          <p style="margin: 8px 0 0 0; font-size: 14px; color: #6b7280;">Based on ${total} patient${total !== 1 ? 's' : ''}</p>
-        </div>
-        <div style="background: ${status.color}15; border: 2px solid ${status.color}; border-radius: 12px; padding: 16px 24px; text-align: center;">
-          <p style="margin: 0; font-size: 20px; font-weight: 700; color: ${status.color};">${status.text}</p>
-          <p style="margin: 4px 0 0 0; font-size: 14px; color: #6b7280;">${status.label}</p>
-        </div>
-      </div>
-      
-      <!-- Rating Scale -->
-      <div style="margin-bottom: 24px; padding: 16px; background: #eff6ff; border-radius: 12px; border: 1px solid #dbeafe;">
-        <p style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600; color: #1f2937;">Rating Scale:</p>
-        <div style="display: flex; justify-content: space-between; font-size: 12px; color: #4b5563;">
-          <div><strong>5</strong> = Excellent</div>
-          <div><strong>4</strong> = Very Good</div>
-          <div><strong>3</strong> = Average</div>
-          <div><strong>2</strong> = Not Good</div>
-          <div><strong>1</strong> = Very Bad</div>
-        </div>
-      </div>
-      
-      <!-- Detailed Ratings -->
-      ${question_ratings && question_ratings.length > 0 ? `
-      <div style="margin-top: 24px;">
-        <h3 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 700; color: #1f2937;">Detailed Ratings by Category</h3>
-        ${questionRatingsHtml}
-      </div>
-      ` : ''}
-    </div>
-    
-    <!-- Performance Summary -->
-    <div style="padding: 24px 32px; background: #eff6ff; border-top: 1px solid #dbeafe;">
-      <h4 style="margin: 0 0 8px 0; font-size: 16px; font-weight: 700; color: #1f2937;">Performance Summary</h4>
-      <p style="margin: 0; color: #4b5563; line-height: 1.7;">
-        ${getFeedbackMessage()}
-      </p>
-    </div>
-    
-    <!-- Footer -->
-    <div style="padding: 16px 32px; background: #f3f4f6; border-top: 1px solid #e5e7eb;">
-      <p style="margin: 0; font-size: 12px; color: #9ca3af; text-align: center;">
-        This is an automated report from the Patient Feedback System. | Generated on ${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })}
-      </p>
-    </div>
-  </div>
-</body>
-</html>
-    `;
+Please find below your Patient Feedback Performance Report for the evaluation period ${formatDate(date_from)} - ${formatDate(date_to)}.
+
+This report is based on feedback received from ${total} patient${total !== 1 ? 's' : ''} who completed the patient satisfaction survey during their visit.
+
+Overall Performance Rating
+
+${rating.toFixed(1)} / 5.0
+Performance Level: ${status}
+
+Category Ratings
+
+${categoryRatingsText}
+
+Performance Summary
+
+${getFeedbackMessage()}
+
+We appreciate your continued commitment to delivering quality healthcare services and value your dedication to patient care.
+
+Kind regards,
+Management Team
+Patient Experience & Quality Department`;
+
+    const html = `<pre style="font-family: 'Segoe UI', Arial, sans-serif; font-size: 14px; line-height: 1.6; white-space: pre-wrap; word-wrap: break-word;">${message}</pre>`;
 
     try {
       const result = await sendEmail({
@@ -1518,23 +1421,52 @@ app.post('/api/doctor-ratings/send-all', requireAuth, async function (req, res) 
     };
     
     const getRatingStatus = (rating) => {
-      if (rating >= 4.5) return { text: 'Excellent', label: 'Outstanding performance', color: '#059669' };
-      if (rating >= 4.0) return { text: 'Very Good', label: 'Strong performance', color: '#059669' };
-      if (rating >= 3.5) return { text: 'Good', label: 'Good performance', color: '#2563eb' };
-      if (rating >= 3.0) return { text: 'Average', label: 'Moderate performance', color: '#d97706' };
-      if (rating >= 2.0) return { text: 'Below Average', label: 'Needs improvement', color: '#ea580c' };
-      return { text: 'Poor', label: 'Requires urgent attention', color: '#dc2626' };
+      if (rating >= 4.5) return 'Excellent';
+      if (rating >= 4.0) return 'Very Good';
+      if (rating >= 3.5) return 'Good';
+      if (rating >= 3.0) return 'Average';
+      if (rating >= 2.0) return 'Below Average';
+      return 'Poor';
     };
     
-    const getFeedbackMessage = (rating) => {
+    const getFeedbackMessage = (rating, question_ratings) => {
+      let strengths = [];
+      let improvements = [];
+      
+      if (Array.isArray(question_ratings) && question_ratings.length > 0) {
+        for (const qr of question_ratings) {
+          const avg = Number(qr.average) || 0;
+          const questionName = qr.question_key || 'Rating';
+          
+          if (qr.type === 'yes_no') {
+            const yesCount = qr.yes_count || 0;
+            const noCount = qr.no_count || 0;
+            const yesPct = (yesCount + noCount) > 0 ? Math.round((yesCount / (yesCount + noCount)) * 100) : 0;
+            if (yesPct >= 80) {
+              strengths.push(questionName);
+            } else if (yesPct < 50) {
+              improvements.push(questionName);
+            }
+          } else {
+            if (avg >= 4.0) {
+              strengths.push(questionName);
+            } else if (avg < 3.0) {
+              improvements.push(questionName);
+            }
+          }
+        }
+      }
+      
       if (rating >= 4.0) {
-        return 'Outstanding performance! Patients consistently rate you at the highest levels across all aspects of care. Your dedication to patient satisfaction is evident. Continue providing this exceptional level of care.';
+        return 'Your overall performance is rated as Excellent. Patients consistently rate you at the highest levels across all aspects of care. Your dedication to patient satisfaction is evident. Continue providing this exceptional level of care.';
+      } else if (rating >= 3.5 && improvements.length > 0) {
+        return `Your overall performance is rated as Good. Patients appreciate your care and service.\n\nAreas where you excel: ${strengths.join(', ')}.\n\nAreas for improvement: ${improvements.join(', ')}. Focusing on these areas could help enhance overall patient satisfaction even more.`;
       } else if (rating >= 3.5) {
-        return 'Good performance. Patients appreciate your care and service. While you are performing well, there are specific areas where focused improvement could elevate patient satisfaction even further.';
+        return 'Your overall performance is rated as Good. Patients appreciate the care and service you provide. Your professionalism and communication were positively recognized.\n\nThere are opportunities for further improvement in areas such as quality of care experience and time & attention, which could help enhance overall patient satisfaction even more.';
       } else if (rating >= 3.0) {
-        return 'Average performance indicates that there is room for improvement. Consider reviewing the detailed feedback to identify specific areas where you can enhance patient experience.';
+        return `Your overall performance is rated as Average. ${improvements.length > 0 ? `Specific areas needing attention: ${improvements.join(', ')}.` : 'Consider reviewing the detailed feedback to identify specific areas where you can enhance patient experience.'}`;
       } else {
-        return 'Below average ratings suggest that improvements are needed. We recommend reviewing the feedback carefully and working with your supervisors to develop an improvement plan.';
+        return `Your overall performance needs improvement. We recommend focusing on: ${improvements.length > 0 ? improvements.join(', ') : 'all aspects of patient care'}. Please review the detailed feedback carefully and work with your supervisors to develop an improvement plan.`;
       }
     };
 
@@ -1550,174 +1482,49 @@ app.post('/api/doctor-ratings/send-all', requireAuth, async function (req, res) 
       const total = Number(total_patients || 0);
       const status = getRatingStatus(rating);
 
-      const starIcons = Array.from({length: 5}, (_, i) => i < Math.round(rating) ? '★' : '☆').join('');
+      let categoryRatingsText = '';
+      if (Array.isArray(question_ratings) && question_ratings.length > 0) {
+        const categoryLines = question_ratings.map(qr => {
+          const questionName = qr.question_key || 'Rating';
+          const yesCount = qr.yes_count || 0;
+          const noCount = qr.no_count || 0;
+          const avg = Number(qr.average).toFixed(1);
+          
+          if (qr.type === 'yes_no') {
+            const yesPct = (yesCount + noCount) > 0 ? Math.round((yesCount / (yesCount + noCount)) * 100) : 0;
+            return `* ${questionName}: ${yesPct}% Positive Response (${yesCount} Yes / ${noCount} No)`;
+          }
+          return `* ${questionName}: ${avg} / 5.0`;
+        });
+        categoryRatingsText = categoryLines.join('\n');
+      }
 
-      const questionRatingsHtml = Array.isArray(question_ratings) && question_ratings.length > 0
-        ? question_ratings.map(qr => {
-            const pct = (Number(qr.average) / 5) * 100;
-            const barColor = qr.average >= 4.5 ? '#10b981' : qr.average >= 4.0 ? '#10b981' : qr.average >= 3.5 ? '#3b82f6' : qr.average >= 3.0 ? '#3b82f6' : qr.average >= 2.0 ? '#f59e0b' : '#ef4444';
-            const questionName = qr.question_key || 'Rating';
-            const yesCount = qr.yes_count || 0;
-            const noCount = qr.no_count || 0;
-            const avg = Number(qr.average).toFixed(1);
-            const qrStars = Array.from({length: 5}, (_, i) => i < Math.round(qr.average) ? '★' : '☆').join('');
-            
-            if (qr.type === 'yes_no') {
-              return `
-                <div style="background: #f9fafb; border-radius: 12px; padding: 20px; margin-bottom: 16px; border: 1px solid #f3f4f6;">
-                  <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <div style="flex: 1;">
-                      <p style="font-weight: 600; color: #1f2937; margin: 0; font-size: 18px;">${questionName}</p>
-                      <div style="display: flex; gap: 16px; margin-top: 8px;">
-                        <span style="font-size: 14px; color: #059669; font-weight: 500;">Yes: ${yesCount}</span>
-                        <span style="font-size: 14px; color: #dc2626; font-weight: 500;">No: ${noCount}</span>
-                      </div>
-                      <p style="font-size: 14px; color: #6b7280; margin: 4px 0 0 0;">${qr.count} patient${qr.count !== 1 ? 's' : ''} rated this aspect</p>
-                    </div>
-                    <div style="text-align: right;">
-                      <span style="font-size: 36px; font-weight: 700; color: #1f2937;">${yesCount}</span>
-                      <p style="font-size: 12px; color: #6b7280; margin: 4px 0 0 0;">Yes answers</p>
-                    </div>
-                  </div>
-                </div>
-              `;
-            }
-            
-            return `
-              <div style="background: #f9fafb; border-radius: 12px; padding: 20px; margin-bottom: 16px; border: 1px solid #f3f4f6;">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                  <div style="flex: 1;">
-                    <p style="font-weight: 600; color: #1f2937; margin: 0; font-size: 18px;">${questionName}</p>
-                    <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px;">
-                      <span style="color: #f59e0b; font-size: 16px;">${qrStars}</span>
-                      <span style="font-size: 14px; color: #6b7280;">(${avg} / 5.0)</span>
-                    </div>
-                    <p style="font-size: 14px; color: #6b7280; margin: 4px 0 0 0;">${qr.count} patient${qr.count !== 1 ? 's' : ''} rated this aspect</p>
-                  </div>
-                  <div style="text-align: right;">
-                    <span style="font-size: 36px; font-weight: 700; color: #1f2937;">${avg}</span>
-                    <div style="text-align: center; margin-top: 4px;">
-                      <span style="color: #f59e0b; font-size: 14px;">${qrStars}</span>
-                      <p style="font-size: 12px; color: #6b7280; margin: 4px 0 0 0;">out of 5</p>
-                    </div>
-                  </div>
-                </div>
-                <div style="margin-top: 12px;">
-                  <div style="background: #e5e7eb; border-radius: 9999px; height: 12px; width: 100%;">
-                    <div style="background: ${barColor}; height: 12px; border-radius: 9999px; width: ${pct}%;"></div>
-                  </div>
-                </div>
-              </div>
-            `;
-          }).join('')
-        : '';
+      const message = `Dear ${doctor_name},
 
-      const html = `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f3f4f6;">
-  <div style="max-width: 700px; margin: 20px auto; background: white; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
-    
-    <!-- Header -->
-    <div style="background: linear-gradient(to right, #2563eb, #4f46e5); padding: 24px 32px; color: white;">
-      <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-        <div>
-          <h1 style="margin: 0; font-size: 24px; font-weight: 700;">Patient Feedback Report</h1>
-          <p style="margin: 4px 0 0 0; color: #bfdbfe; font-size: 14px;">Confidential - For Doctor's Review</p>
-        </div>
-        <div style="text-align: right;">
-          <p style="margin: 0; font-size: 12px; color: #bfdbfe;">Report Period</p>
-          <p style="margin: 2px 0 0 0; font-weight: 600; font-size: 14px;">${formatDate(date_from)} - ${formatDate(date_to)}</p>
-        </div>
-      </div>
-    </div>
-    
-    <!-- Doctor Info -->
-    <div style="padding: 32px; border-bottom: 1px solid #e5e7eb;">
-      <div style="display: flex; align-items: center; gap: 16px;">
-        <div style="width: 64px; height: 64px; background: linear-gradient(135deg, #3b82f6, #6366f1); border-radius: 16px; display: flex; align-items: center; justify-content: center; color: white; font-size: 28px; font-weight: 700;">
-          ${(doctor_name || 'D').charAt(0)}
-        </div>
-        <div>
-          <h2 style="margin: 0; font-size: 24px; font-weight: 700; color: #1f2937;">${doctor_name}</h2>
-          <p style="margin: 4px 0 0 0; color: #6b7280; font-size: 14px;">Doctor ID: ${doctor_id || 'N/A'} | Department: ${doctor.department || 'General'}</p>
-        </div>
-      </div>
-    </div>
-    
-    <!-- Summary -->
-    <div style="padding: 32px; background: #f9fafb;">
-      <p style="color: #4b5563; line-height: 1.8; margin: 0;">
-        Dear <strong style="color: #1f2937;">${doctor_name}</strong>,
-      </p>
-      <p style="color: #4b5563; line-height: 1.8; margin: 12px 0 0 0;">
-        We are pleased to present your patient feedback report for the period of <strong style="color: #1f2937;">${formatDate(date_from)}</strong> to <strong style="color: #1f2937;">${formatDate(date_to)}</strong>. 
-        This report summarizes the feedback collected from <strong style="color: #1f2937;">${total} patient${total !== 1 ? 's' : ''}</strong> who completed our patient satisfaction survey during their visit.
-      </p>
-    </div>
-    
-    <!-- Main Rating -->
-    <div style="padding: 32px;">
-      <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px;">
-        <div>
-          <p style="margin: 0; color: #6b7280; font-size: 14px; text-transform: uppercase; letter-spacing: 1px;">Overall Rating</p>
-          <div style="display: flex; align-items: baseline; gap: 8px; margin-top: 4px;">
-            <span style="font-size: 56px; font-weight: 700; color: #1f2937;">${rating.toFixed(1)}</span>
-            <span style="font-size: 20px; color: #9ca3af;">/ 5.0</span>
-          </div>
-          <div style="margin-top: 8px;">
-            <span style="color: #f59e0b; font-size: 20px;">${starIcons}</span>
-          </div>
-          <p style="margin: 8px 0 0 0; font-size: 14px; color: #6b7280;">Based on ${total} patient${total !== 1 ? 's' : ''}</p>
-        </div>
-        <div style="background: ${status.color}15; border: 2px solid ${status.color}; border-radius: 12px; padding: 16px 24px; text-align: center;">
-          <p style="margin: 0; font-size: 20px; font-weight: 700; color: ${status.color};">${status.text}</p>
-          <p style="margin: 4px 0 0 0; font-size: 14px; color: #6b7280;">${status.label}</p>
-        </div>
-      </div>
-      
-      <!-- Rating Scale -->
-      <div style="margin-bottom: 24px; padding: 16px; background: #eff6ff; border-radius: 12px; border: 1px solid #dbeafe;">
-        <p style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600; color: #1f2937;">Rating Scale:</p>
-        <div style="display: flex; justify-content: space-between; font-size: 12px; color: #4b5563;">
-          <div><strong>5</strong> = Excellent</div>
-          <div><strong>4</strong> = Very Good</div>
-          <div><strong>3</strong> = Average</div>
-          <div><strong>2</strong> = Not Good</div>
-          <div><strong>1</strong> = Very Bad</div>
-        </div>
-      </div>
-      
-      <!-- Detailed Ratings -->
-      ${question_ratings && question_ratings.length > 0 ? `
-      <div style="margin-top: 24px;">
-        <h3 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 700; color: #1f2937;">Detailed Ratings by Category</h3>
-        ${questionRatingsHtml}
-      </div>
-      ` : ''}
-      
-      <!-- Performance Summary -->
-      <div style="padding: 24px 32px; background: #eff6ff; border-top: 1px solid #dbeafe;">
-        <h4 style="margin: 0 0 8px 0; font-size: 16px; font-weight: 700; color: #1f2937;">Performance Summary</h4>
-        <p style="margin: 0; color: #4b5563; line-height: 1.7;">
-          ${getFeedbackMessage(rating)}
-        </p>
-      </div>
-      
-      <!-- Footer -->
-      <div style="padding: 16px 32px; background: #f3f4f6; border-top: 1px solid #e5e7eb;">
-        <p style="margin: 0; font-size: 12px; color: #9ca3af; text-align: center;">
-          This is an automated report from the Patient Feedback System. | Generated on ${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })}
-        </p>
-      </div>
-    </div>
-  </body>
-  </html>
-      `;
+Please find below your Patient Feedback Performance Report for the evaluation period ${formatDate(date_from)} - ${formatDate(date_to)}.
+
+This report is based on feedback received from ${total} patient${total !== 1 ? 's' : ''} who completed the patient satisfaction survey during their visit.
+
+Overall Performance Rating
+
+${rating.toFixed(1)} / 5.0
+Performance Level: ${status}
+
+Category Ratings
+
+${categoryRatingsText}
+
+Performance Summary
+
+${getFeedbackMessage(rating, question_ratings)}
+
+We appreciate your continued commitment to delivering quality healthcare services and value your dedication to patient care.
+
+Kind regards,
+Management Team
+Patient Experience & Quality Department`;
+
+      const html = `<pre style="font-family: 'Segoe UI', Arial, sans-serif; font-size: 14px; line-height: 1.6; white-space: pre-wrap; word-wrap: break-word;">${message}</pre>`;
 
       try {
         const result = await sendEmail({
@@ -1746,12 +1553,42 @@ app.post('/api/doctor-ratings/send-all', requireAuth, async function (req, res) 
   }
 });
 
-app.get('/api/analytics', requireAuth, async function (_req, res) {
-  const totals = await db.query('SELECT COUNT(*)::int AS total_submissions FROM feedback_submissions');
+app.get('/api/analytics', requireAuth, async function (req, res) {
+  const { date_from, date_to } = req.query;
+  
+  let dateFilter = '';
+  const params = [];
+  
+  if (date_from && date_to) {
+    dateFilter = 'WHERE DATE(fs.submitted_at) >= $1 AND DATE(fs.submitted_at) <= $2';
+    params.push(date_from, date_to);
+  } else if (date_from) {
+    dateFilter = 'WHERE DATE(fs.submitted_at) >= $1';
+    params.push(date_from);
+  } else if (date_to) {
+    dateFilter = 'WHERE DATE(fs.submitted_at) <= $1';
+    params.push(date_to);
+  }
+  
+  const totals = await db.query(
+    `SELECT COUNT(*)::int AS total_submissions FROM feedback_submissions fs ${dateFilter}`,
+    params
+  );
+
+  const questions = await fetchQuestions({ includeInactive: false });
+  const generalQuestionKeys = new Set(questions.filter(q => q.category === 'general').map(q => q.key));
 
   const submissions = await db.query(
-    'SELECT fs.question_answers, fs.selected_doctor_ids, fs.selected_doctor_names FROM feedback_submissions fs'
+    `SELECT fs.id AS submission_id, fs.question_answers, fs.selected_doctor_ids, fs.selected_doctor_names FROM feedback_submissions fs ${dateFilter}`,
+    params
   );
+  
+  let generalSatisfied = 0;
+  let generalNeutral = 0;
+  let generalNotSatisfied = 0;
+  const generalQuestionStats = {};
+  const generalStarRatings = {};
+  const generalYesNo = {};
 
   const doctorStats = {};
   
@@ -1787,6 +1624,50 @@ app.get('/api/analytics', requireAuth, async function (_req, res) {
     }
     
     for (const key of allKeys) {
+      const isGeneralQuestion = generalQuestionKeys.has(key);
+      const value = qa[key];
+      
+      if (isGeneralQuestion) {
+        if (!generalQuestionStats[key]) {
+          generalQuestionStats[key] = { satisfied: 0, neutral: 0, not_satisfied: 0 };
+        }
+        
+        if (typeof value === 'number' && value >= 1 && value <= 5) {
+          if (!generalStarRatings[key]) {
+            generalStarRatings[key] = [];
+          }
+          generalStarRatings[key].push(value);
+          
+          if (value >= 4) {
+            generalSatisfied++;
+            generalQuestionStats[key].satisfied++;
+          }
+          else if (value === 3) {
+            generalNeutral++;
+            generalQuestionStats[key].neutral++;
+          }
+          else {
+            generalNotSatisfied++;
+            generalQuestionStats[key].not_satisfied++;
+          }
+        } else if (typeof value === 'string') {
+          const lowerVal = value.toLowerCase();
+          if (!generalYesNo[key]) {
+            generalYesNo[key] = { yes: 0, no: 0 };
+          }
+          if (lowerVal === 'yes') {
+            generalSatisfied++;
+            generalQuestionStats[key].satisfied++;
+            generalYesNo[key].yes++;
+          }
+          else if (lowerVal === 'no') {
+            generalNotSatisfied++;
+            generalQuestionStats[key].not_satisfied++;
+            generalYesNo[key].no++;
+          }
+        }
+      }
+      
       const match = key.match(/^doctor_([^_]+)_(.+)$/);
       if (match) {
         const doctorId = match[1];
@@ -1798,15 +1679,26 @@ app.get('/api/analytics', requireAuth, async function (_req, res) {
           doctorStats[doctorName] = {
             doctor_id: doctorId,
             doctor_name: doctorName,
-            question_ratings: {}
+            question_ratings: {},
+            question_answers: {},
+            patient_ids: new Set()
           };
         }
+        
+        doctorStats[doctorName].patient_ids.add(row.submission_id);
         
         if (typeof value === 'number' && value >= 1 && value <= 5) {
           if (!doctorStats[doctorName].question_ratings[questionKey]) {
             doctorStats[doctorName].question_ratings[questionKey] = [];
           }
           doctorStats[doctorName].question_ratings[questionKey].push(value);
+        }
+        
+        if (value !== undefined && value !== null && value !== '') {
+          if (!doctorStats[doctorName].question_answers[questionKey]) {
+            doctorStats[doctorName].question_answers[questionKey] = [];
+          }
+          doctorStats[doctorName].question_answers[questionKey].push(String(value));
         }
       }
     }
@@ -1815,26 +1707,129 @@ app.get('/api/analytics', requireAuth, async function (_req, res) {
   const doctorAverages = Object.values(doctorStats).map(d => {
     const allRatings = [];
     const questionRatings = {};
-    for (const [qKey, ratings] of Object.entries(d.question_ratings)) {
+    const questionAnswers = {};
+    
+    for (const [qKey, ratings] of Object.entries(d.question_ratings || {})) {
       const avg = ratings.reduce((a, b) => a + b, 0) / ratings.length;
       questionRatings[qKey] = Math.round(avg * 100) / 100;
       allRatings.push(...ratings);
     }
+    
+    for (const [qKey, answers] of Object.entries(d.question_answers || {})) {
+      const countByAnswer = {};
+      for (const ans of answers) {
+        countByAnswer[ans] = (countByAnswer[ans] || 0) + 1;
+      }
+      const total = answers.length;
+      const percentages = {};
+      for (const [ans, count] of Object.entries(countByAnswer)) {
+        percentages[ans] = Math.round((count / total) * 100);
+      }
+      questionAnswers[qKey] = {
+        counts: countByAnswer,
+        percentages,
+        total
+      };
+    }
+    
     const avg = allRatings.length > 0 
       ? allRatings.reduce((a, b) => a + b, 0) / allRatings.length 
       : 0;
+    const patientCount = d.patient_ids ? d.patient_ids.size : 0;
     return {
       doctor_id: d.doctor_id,
       doctor_name: d.doctor_name,
       avg_rating: allRatings.length > 0 ? Math.round(avg * 100) / 100 : null,
       rating_count: allRatings.length,
-      question_ratings: questionRatings
+      patient_count: patientCount,
+      question_ratings: questionRatings,
+      question_answers: questionAnswers
     };
   }).sort((a, b) => (b.avg_rating || 0) - (a.avg_rating || 0));
 
+  const totalGeneral = generalSatisfied + generalNeutral + generalNotSatisfied;
+  const questionBreakdown = Object.entries(generalQuestionStats).map(([key, stats]) => {
+    const qTotal = stats.satisfied + stats.neutral + stats.not_satisfied;
+    
+    let avgSatisfied = 0;
+    let avgNeutral = 3;
+    let avgNotSatisfied = 0;
+    
+    if (stats.satisfied > 0) {
+      const ratings = (generalStarRatings[key] || []).filter(r => r >= 4);
+      if (ratings.length > 0) {
+        const avg = ratings.reduce((a, b) => a + b, 0) / ratings.length;
+        avgSatisfied = Math.round(avg * 100) / 100;
+      } else {
+        avgSatisfied = 4;
+      }
+    }
+    if (stats.not_satisfied > 0) {
+      const ratings = (generalStarRatings[key] || []).filter(r => r <= 2);
+      if (ratings.length > 0) {
+        const avg = ratings.reduce((a, b) => a + b, 0) / ratings.length;
+        avgNotSatisfied = Math.round(avg * 100) / 100;
+      } else {
+        avgNotSatisfied = 1.5;
+      }
+    }
+    
+    const notSatisfiedHeight = avgNotSatisfied;
+    const neutralHeight = avgSatisfied - avgNotSatisfied;
+    const satisfiedHeight = 5 - avgSatisfied;
+    
+    return {
+      question_key: key,
+      satisfied: stats.satisfied,
+      neutral: stats.neutral,
+      not_satisfied: stats.not_satisfied,
+      avg_satisfied: avgSatisfied,
+      avg_neutral: avgNeutral,
+      avg_not_satisfied: avgNotSatisfied,
+      total: qTotal,
+      satisfied_percent: qTotal > 0 ? Math.round((stats.satisfied / qTotal) * 100) : 0,
+      neutral_percent: qTotal > 0 ? Math.round((stats.neutral / qTotal) * 100) : 0,
+      not_satisfied_percent: qTotal > 0 ? Math.round((stats.not_satisfied / qTotal) * 100) : 0
+    };
+  }).filter(q => q.total > 0);
+  
+  const starRatingAverages = Object.entries(generalStarRatings).map(([key, ratings]) => {
+    if (!ratings || ratings.length === 0) return null;
+    const avg = ratings.reduce((a, b) => a + b, 0) / ratings.length;
+    return {
+      question_key: key,
+      average: Math.round(avg * 100) / 100,
+      total: ratings.length
+    };
+  }).filter(q => q !== null);
+  
+  const yesNoBreakdown = Object.entries(generalYesNo).map(([key, stats]) => {
+    const total = stats.yes + stats.no;
+    return {
+      question_key: key,
+      yes: stats.yes,
+      no: stats.no,
+      yes_percent: total > 0 ? Math.round((stats.yes / total) * 100) : 0,
+      no_percent: total > 0 ? Math.round((stats.no / total) * 100) : 0,
+      total: total
+    };
+  }).filter(q => q.total > 0);
+  
   return res.json({
     total_submissions: totals.rows[0] ? totals.rows[0].total_submissions : 0,
-    doctor_averages: doctorAverages
+    doctor_averages: doctorAverages,
+    general_satisfaction: {
+      satisfied: generalSatisfied,
+      neutral: generalNeutral,
+      not_satisfied: generalNotSatisfied,
+      total: totalGeneral,
+      satisfied_percent: totalGeneral > 0 ? Math.round((generalSatisfied / totalGeneral) * 100) : 0,
+      neutral_percent: totalGeneral > 0 ? Math.round((generalNeutral / totalGeneral) * 100) : 0,
+      not_satisfied_percent: totalGeneral > 0 ? Math.round((generalNotSatisfied / totalGeneral) * 100) : 0
+    },
+    question_breakdown: questionBreakdown,
+    star_rating_breakdown: starRatingAverages,
+    yesno_breakdown: yesNoBreakdown
   });
 });
 

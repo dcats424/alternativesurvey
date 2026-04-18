@@ -5,6 +5,9 @@ import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import * as XLSX from 'xlsx';
 import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell, PieChart, Pie
+} from 'recharts';
+import {
   LayoutDashboard, FileText, MessageSquare,
   ChevronRight, Star, Users, Plus, Trash2,
   Download, Search, Filter, ChevronLeft, X, Check, AlertCircle,
@@ -255,6 +258,7 @@ function SurveyPage() {
   const [selectedLang, setSelectedLang] = React.useState('am');
   const [selectedDoctors, setSelectedDoctors] = React.useState([]);
   const [surveyPhase, setSurveyPhase] = React.useState('select');
+  const [doctorSearch, setDoctorSearch] = React.useState('');
 
   const totalPages = selectedDoctors.length + (generalQuestions.length > 0 ? 1 : 0);
 
@@ -297,7 +301,9 @@ function SurveyPage() {
     shareThoughts: { en: 'Share your thoughts with us...', am: 'አስተያየትዎን ለኛ ያጋሩ...' },
     enterNumber: { en: 'Enter a number', am: 'ቁጥር ያስገቡ' },
     selectDoctors: { en: 'Select Your Doctors', am: 'ሐኪሞችን ይምረጡ' },
-    selectDoctorsHelper: { en: 'Select all doctors who treated you', am: 'የሚረዱዎትን ሁሉም ሐኪሞች ይምረጡ' },
+    selectDoctorsHelper: { en: 'Select doctors who treated you', am: 'ህክምና የሰጡዎትን ዶክተሮች ይምረጡ' },
+    searchDoctors: { en: 'Search doctors...', am: 'ዶክተሮችን ይፈልጉ...' },
+    selectedDoctors: { en: 'Selected Doctors', am: 'የተመረጡ ሐኪሞች' },
     yourName: { en: 'Your Name', am: 'ስምዎ' },
     optional: { en: '(optional)', am: '(አማራጭ)' },
     namePlaceholder: { en: 'Enter your name (optional)', am: 'ስምዎን ያስገቡ (አማራጭ)' },
@@ -842,8 +848,52 @@ function SurveyPage() {
       <p className="text-gray-600 text-sm">{t('selectDoctorsHelper')}</p>
     </div>
 
-    <div className="space-y-3 mb-8">
-      {doctors.map((doctor) => {
+    <div className="mb-6">
+      <div className="relative">
+        <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+        <input
+          type="text"
+          value={doctorSearch}
+          onChange={(e) => setDoctorSearch(e.target.value)}
+          placeholder={t('searchDoctors')}
+          className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-200 transition-all"
+        />
+      </div>
+    </div>
+
+    {selectedDoctors.length > 0 && (
+      <div className="mb-6 p-4 bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl border-2 border-green-200">
+        <p className="text-sm font-semibold text-green-700 mb-3">
+          {t('selectedDoctors')} ({selectedDoctors.length})
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {selectedDoctors.map((doctor) => (
+            <div
+              key={doctor.id}
+              className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-full shadow-sm"
+            >
+              <span className="font-medium">{doctor.name}</span>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleDoctor(doctor);
+                }}
+                className="w-5 h-5 flex items-center justify-center bg-white/20 hover:bg-white/30 rounded-full transition-colors"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+    )}
+
+    <div className="space-y-3 mb-8 max-h-80 overflow-y-auto">
+      {doctors.filter(d => 
+        d.name.toLowerCase().includes(doctorSearch.toLowerCase()) ||
+        (d.department && d.department.toLowerCase().includes(doctorSearch.toLowerCase()))
+      ).map((doctor) => {
         const isSelected = selectedDoctors.some(d => d.id === doctor.id);
         return (
           <div
@@ -1109,6 +1159,10 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
   const [activeTab, setActiveTab] = React.useState('dashboard');
   const [message, setMessage] = React.useState({ type: '', text: '' });
   const [analytics, setAnalytics] = React.useState(null);
+  const [dashboardDateFilter, setDashboardDateFilter] = React.useState('today');
+  const [dashboardDateRange, setDashboardDateRange] = React.useState({ date_from: '', date_to: '' });
+  const dashboardDateFilterRef = React.useRef('today');
+  const dashboardDateRangeRef = React.useRef({ date_from: '', date_to: '' });
   const [responses, setResponses] = React.useState([]);
   const [questions, setQuestions] = React.useState([]);
   const [doctorsList, setDoctorsList] = React.useState([]);
@@ -1131,6 +1185,19 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
   const [loadingResponses, setLoadingResponses] = React.useState(false);
   const [pagination, setPagination] = React.useState({ page: 1, limit: 5, total: 0, total_pages: 0 });
   const [pageLimit, setPageLimit] = React.useState(5);
+  const [dashboardLoading, setDashboardLoading] = React.useState(false);
+
+  React.useEffect(() => {
+    const today = new Date();
+    const dateStr = today.getFullYear() + '-' + 
+      String(today.getMonth() + 1).padStart(2, '0') + '-' + 
+      String(today.getDate()).padStart(2, '0');
+    const range = { date_from: dateStr, date_to: dateStr };
+    dashboardDateRangeRef.current = range;
+    dashboardDateFilterRef.current = 'today';
+    setDashboardDateRange(range);
+    loadDashboardData(dateStr, dateStr);
+  }, []);
 
   const [newQuestion, setNewQuestion] = React.useState({
     key: '',
@@ -1410,16 +1477,22 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
   }, [activeTab]);
 
   const LAST_SEEN_KEY = 'last_seen_response_id';
+  const lastSeenIdRef = React.useRef(parseInt(localStorage.getItem(LAST_SEEN_KEY) || '0'));
   
   React.useEffect(() => {
-    let lastKnownId = parseInt(localStorage.getItem(LAST_SEEN_KEY) || '0');
-    
     async function pollForNewResponses() {
       try {
         const res = await fetch('/api/responses?grouped=true&page=1&limit=20', { headers: headers() });
         const data = await res.json();
-        if (res.ok && data.responses && data.responses.length > 0) {
+        
+        if (!res.ok) {
+          console.error('Poll failed:', data.error);
+          return;
+        }
+        
+        if (data.responses && data.responses.length > 0) {
           const latestId = Math.max(...data.responses.map(r => r.submission_id));
+          const lastKnownId = lastSeenIdRef.current;
           
           const newResponses = data.responses.filter(r => r.submission_id > lastKnownId);
           
@@ -1430,11 +1503,10 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
               return [...uniqueNew, ...prev].slice(0, 10);
             });
             setHasNewNotifications(true);
-            toast.success(`${newResponses.length} new response${newResponses.length > 1 ? 's' : ''} received!`);
           }
           
+          lastSeenIdRef.current = latestId;
           localStorage.setItem(LAST_SEEN_KEY, String(latestId));
-          lastKnownId = latestId;
         }
       } catch (err) {
         console.error('Poll error:', err);
@@ -1493,13 +1565,121 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
     return 'bg-red-100 text-red-700 border-red-200';
   }
 
-  async function loadAll(showNotif = true) {
-    try {
-      if (showNotif) showMessage('Loading...', 'info');
+  function getDateString(date) {
+    const d = new Date(date);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
 
-      const [aRes, rRes, qRes, dRes] = await Promise.all([
-        fetch('/api/analytics', { headers: headers() }),
-        fetch(`/api/responses?grouped=true&page=1&limit=${pageLimit}`, { headers: headers() }),
+  function handleDashboardDateFilterChange(filterType) {
+    const now = new Date();
+    let from = '';
+    let to = '';
+    
+    if (filterType === 'today') {
+      from = getDateString(now);
+      to = getDateString(now);
+    } else if (filterType === 'yesterday') {
+      const d = new Date(now);
+      d.setDate(d.getDate() - 1);
+      from = getDateString(d);
+      to = getDateString(d);
+    } else if (filterType === 'this_week') {
+      const start = new Date(now);
+      const day = start.getDay();
+      // Monday is start of week: Sunday = 0, so adjust to subtract (day === 0 ? 6 : day - 1)
+      const offset = day === 0 ? 6 : day - 1;
+      start.setDate(start.getDate() - offset);
+      
+      const end = new Date(start);
+      end.setDate(end.getDate() + 6);
+      
+      from = getDateString(start);
+      to = getDateString(end);
+    } else if (filterType === 'this_month') {
+      const start = new Date(now.getFullYear(), now.getMonth(), 1);
+      const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      
+      from = getDateString(start);
+      to = getDateString(end);
+    } else if (filterType === 'last_month') {
+      const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const end = new Date(now.getFullYear(), now.getMonth(), 0);
+      from = getDateString(start);
+      to = getDateString(end);
+    } else if (filterType === 'custom') {
+      setDashboardDateFilter('custom');
+      dashboardDateFilterRef.current = 'custom';
+      return;
+    }
+    
+    dashboardDateFilterRef.current = filterType;
+    dashboardDateRangeRef.current = { date_from: from, date_to: to };
+    
+    setDashboardDateFilter(filterType);
+    setDashboardDateRange({ date_from: from, date_to: to });
+    loadDashboardData(from, to);
+  }
+
+  function handleCustomDateChange(type, value) {
+    const range = { ...dashboardDateRangeRef.current, [type]: value };
+    dashboardDateRangeRef.current = range;
+    dashboardDateFilterRef.current = 'custom';
+    setDashboardDateFilter('custom');
+    setDashboardDateRange(range);
+    loadDashboardData(range.date_from, range.date_to);
+  }
+
+  async function loadDashboardData(dateFrom, dateTo) {
+    if (dashboardLoading) return;
+    setDashboardLoading(true);
+    try {
+      const params = {};
+      if (dateFrom) params.date_from = dateFrom;
+      if (dateTo) params.date_to = dateTo;
+      
+      const url = '/api/analytics?' + new URLSearchParams(params).toString();
+      const [aRes, qRes, dRes] = await Promise.all([
+        fetch(url, { headers: headers() }),
+        fetch('/api/questions?all=true', { headers: headers() }),
+        fetch('/api/doctors/list', { headers: headers() })
+      ]);
+
+      const [aData, qData, dData] = await Promise.all([aRes.json(), qRes.json(), dRes.json()]);
+
+      if (aRes.ok && !aData.error) setAnalytics(aData);
+      if (qRes.ok && !qData.error) setQuestions(qData.questions || []);
+      if (dRes.ok && !dData.error) {
+        const uniqueDoctors = [];
+        const seen = new Set();
+        for (const d of (dData.doctors || [])) {
+          if (!seen.has(d.id)) {
+            seen.add(d.id);
+            uniqueDoctors.push(d);
+          }
+        }
+        setDoctorsList(uniqueDoctors);
+      }
+    } catch (err) {
+      console.error('Dashboard load error:', err);
+} finally {
+        setDashboardLoading(false);
+      }
+    }
+
+    async function loadAll(showNotif = true) {
+      try {
+        if (showNotif) showMessage('Loading...', 'info');
+
+        const range = dashboardDateRangeRef.current;
+        const [aRes, rRes, qRes, dRes] = await Promise.all([
+          fetch('/api/analytics?' + new URLSearchParams({
+            date_from: range.date_from || '',
+            date_to: range.date_to || ''
+          }), { headers: headers() }),
+          fetch(`/api/responses?grouped=true&page=1&limit=${pageLimit}&date_from=${range.date_from || ''}&date_to=${range.date_to || ''}`, { headers: headers() }),
         fetch('/api/questions?all=true', { headers: headers() }),
         fetch('/api/doctors/list', { headers: headers() })
       ]);
@@ -1538,7 +1718,7 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
     } catch (err) {
       if (showNotif) showMessage('Load failed: ' + err.message, 'error');
     }
-  }
+}
 
   async function fetchResponsesWithFilters(pageOverride, currentFilters, limitOverride) {
     setLoadingResponses(true);
@@ -2172,9 +2352,56 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
 
         {activeTab === 'dashboard' && (
           <div className="space-y-8 animate-fade-in">
-            <div>
-              <h2 className="text-2xl font-bold text-gray-800">Dashboard</h2>
-              <p className="text-gray-500">Overview of your patient feedback system</p>
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+              <div>
+                <h2 className="text-2xl font-bold text-gray-800">Dashboard</h2>
+                <p className="text-gray-500">Overview of your patient feedback system</p>
+              </div>
+              
+              <div className="flex items-center gap-3">
+                <select
+                  value={dashboardDateFilter}
+                  onChange={(e) => {
+                    if (e.target.value === 'custom') {
+                      handleDashboardDateFilterChange('custom');
+                    } else {
+                      handleDashboardDateFilterChange(e.target.value);
+                    }
+                  }}
+                  className="px-4 py-2.5 border border-gray-200 rounded-xl text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                >
+                  <option value="today">Today</option>
+                  <option value="yesterday">Yesterday</option>
+                  <option value="this_week">This Week</option>
+                  <option value="this_month">This Month</option>
+                  <option value="last_month">Last Month</option>
+                  <option value="custom">Custom Range</option>
+                </select>
+                
+                {dashboardDateFilter === 'custom' && (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="date"
+                      value={dashboardDateRange.date_from}
+                      onChange={(e) => { handleCustomDateChange('date_from', e.target.value); }}
+                      className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <span className="text-gray-400">-</span>
+                    <input
+                      type="date"
+                      value={dashboardDateRange.date_to}
+                      onChange={(e) => { handleCustomDateChange('date_to', e.target.value); }}
+                      className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <button
+                      onClick={() => loadAll(false)}
+                      className="px-4 py-2 bg-blue-500 text-white rounded-lg text-sm font-medium hover:bg-blue-600 transition-colors"
+                    >
+                      Apply
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -2227,42 +2454,113 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
               </div>
             </div>
 
-            <div className="bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl p-6 text-white shadow-xl">
-              <div className="flex items-start justify-between">
-                <div>
-                  <h3 className="text-xl font-bold mb-2">Survey Setup</h3>
-                  <p className="text-blue-100 text-sm mb-4">Create a QR code with this URL for patients to scan</p>
-                  
-                  <div className="bg-white/20 rounded-xl p-4 backdrop-blur-sm">
-                    <p className="text-xs text-blue-100 mb-1">Survey URL (encode in QR code)</p>
-                    <p className="font-mono font-bold text-sm break-all">
-                      {window.location.origin}/survey
-                    </p>
+            {(analytics?.question_breakdown?.length > 0 || analytics?.yesno_breakdown?.length > 0) && (
+              <div className="space-y-6">
+{analytics?.star_rating_breakdown?.length > 0 && (
+                  <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+                    <h3 className="text-lg font-bold text-gray-800 mb-6 flex items-center gap-2">
+                      <div className="w-8 h-8 bg-gradient-to-br from-blue-400 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg">
+                        <Star className="w-4 h-4 text-white" />
+                      </div>
+                      General Questions - Average Rating
+                    </h3>
+                    
+                    <div className="space-y-6">
+                      {analytics.star_rating_breakdown.map((q) => {
+                        const avg = q.average || 0;
+                        const percentage = (avg / 5) * 100;
+                        let color = '#ef4444';
+                        if (avg >= 4) color = '#10b981';
+                        else if (avg >= 3) color = '#f59e0b';
+                        
+                        return (
+                          <div key={q.question_key}>
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="font-semibold text-gray-800">{q.question_key}</span>
+                              <span className="font-bold text-lg" style={{ color }}>{avg.toFixed(1)} / 5</span>
+                            </div>
+                            <div className="w-full bg-gray-200 rounded-full h-4 overflow-hidden">
+                              <div 
+                                className="h-full rounded-full transition-all duration-500"
+                                style={{ 
+                                  width: `${percentage}%`,
+                                  backgroundColor: color
+                                }}
+                              />
+                            </div>
+                            <div className="flex justify-between mt-1 text-xs text-gray-500">
+                              <span>0</span>
+                              <span>1</span>
+                              <span>2</span>
+                              <span>3</span>
+                              <span>4</span>
+                              <span>5</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
+                )}
+                
+                {analytics?.yesno_breakdown?.length > 0 && analytics.yesno_breakdown.map((yn) => (
+                  <div key={yn.question_key} className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                        <div className="w-8 h-8 bg-gradient-to-br from-emerald-400 to-teal-600 rounded-xl flex items-center justify-center shadow-lg">
+                          <Check className="w-4 h-4 text-white" />
+                        </div>
+                        {yn.question_key}
+                      </h3>
+                    </div>
+                    
+                    <div className="flex items-center justify-center gap-8">
+                      <ResponsiveContainer width={200} height={200}>
+                        <PieChart>
+                          <Pie
+                            data={[
+                              { name: 'Yes', value: yn.yes, color: '#10b981' },
+                              { name: 'No', value: yn.no, color: '#ef4444' }
+                            ]}
+                            cx="50%"
+                            cy="50%"
+                            innerRadius={50}
+                            outerRadius={80}
+                            paddingAngle={2}
+                            dataKey="value"
+                          >
+                            {[
+                              { name: 'Yes', value: yn.yes, color: '#10b981' },
+                              { name: 'No', value: yn.no, color: '#ef4444' }
+                            ].map((entry, index) => (
+                              <Cell key={`cell-${index}`} fill={entry.color} />
+                            ))}
+                          </Pie>
+                          <Tooltip />
+                        </PieChart>
+                      </ResponsiveContainer>
+                      
+                      <div className="space-y-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-4 h-4 bg-emerald-500 rounded"></div>
+                          <div>
+                            <p className="text-2xl font-bold text-gray-800">{yn.yes}</p>
+                            <p className="text-sm text-gray-500">Yes ({yn.yes_percent}%)</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <div className="w-4 h-4 bg-red-500 rounded"></div>
+                          <div>
+                            <p className="text-2xl font-bold text-gray-800">{yn.no}</p>
+                            <p className="text-sm text-gray-500">No ({yn.no_percent}%)</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
-              
-              <div className="mt-4 pt-4 border-t border-white/20">
-                <h4 className="font-semibold mb-2">How it works:</h4>
-                <ol className="text-sm text-blue-100 space-y-1">
-                  <li>1. Print the QR code or display it on a screen</li>
-                  <li>2. Patients scan the QR code with their phone</li>
-                  <li>3. Each scan generates a unique token</li>
-                  <li>4. Patient selects their doctor(s) and submits feedback</li>
-                </ol>
-              </div>
-              
-              <button
-                onClick={() => {
-                  navigator.clipboard.writeText(window.location.origin + '/survey');
-                  toast.success('URL copied to clipboard!');
-                }}
-                className="mt-4 w-full bg-white/20 hover:bg-white/30 backdrop-blur-sm text-white font-semibold py-3 px-4 rounded-xl transition-all flex items-center justify-center gap-2"
-              >
-                <Copy className="w-4 h-4" />
-                Copy Survey URL
-              </button>
-            </div>
+            )}
 
             <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
               <div className="flex items-center justify-between mb-4">
@@ -2276,26 +2574,57 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
 
               {analytics?.doctor_averages?.length > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {analytics.doctor_averages.map((doctor) => {
+                  {analytics.doctor_averages.map((doctor, index) => {
                     const rating = Number(doctor.avg_rating || 0);
                     const percentage = (rating / 5) * 100;
                     const questionRatings = doctor.question_ratings || {};
-                    const questionKeys = Object.keys(questionRatings);
+                    const questionAnswers = doctor.question_answers || {};
+                    const ratingKeys = Object.keys(questionRatings);
+                    const answerKeys = Object.keys(questionAnswers);
+                    const allKeys = [...new Set([...ratingKeys, ...answerKeys])];
+                    const rank = index + 1;
+                    const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : rank;
+                    
+                    let badge = null;
+                    if (rating >= 4.5) {
+                      badge = { label: 'Top Performer', color: 'bg-gradient-to-r from-emerald-500 to-teal-500', text: 'text-white' };
+                    } else if (rating >= 4.0) {
+                      badge = { label: 'Excellent', color: 'bg-gradient-to-r from-blue-500 to-indigo-500', text: 'text-white' };
+                    } else if (rating < 3.0) {
+                      badge = { label: 'Needs Improvement', color: 'bg-gradient-to-r from-red-500 to-rose-500', text: 'text-white' };
+                    }
                     
                     return (
-                      <div key={doctor.doctor_id} className="bg-gradient-to-br from-gray-50 to-white rounded-xl p-4 border border-gray-100">
+                      <div key={doctor.doctor_id} className="bg-gradient-to-br from-gray-50 to-white rounded-xl p-4 border border-gray-100 hover:shadow-xl transition-all">
                         <div className="flex items-center justify-between mb-3">
                           <div className="flex items-center gap-2">
-                            <div className="w-8 h-8 bg-gradient-to-br from-blue-400 to-indigo-500 rounded-lg flex items-center justify-center text-white font-bold text-sm">
-                              {doctor.doctor_name.charAt(0)}
+                            <div className="relative">
+                              <div className="w-10 h-10 bg-gradient-to-br from-blue-400 to-indigo-500 rounded-xl flex items-center justify-center text-white font-bold text-sm shadow-lg">
+                                {doctor.doctor_name.charAt(0)}
+                              </div>
+                              {rank <= 3 && (
+                                <div className="absolute -top-1 -right-1 w-4 h-4 bg-white rounded-full flex items-center justify-center text-xs">
+                                  {rank === 1 ? '🥇' : rank === 2 ? '🥈' : '🥉'}
+                                </div>
+                              )}
                             </div>
                             <div>
-                              <p className="font-semibold text-gray-800 text-sm">{doctor.doctor_name}</p>
-                              <p className="text-xs text-gray-500">{doctor.rating_count} ratings</p>
+                              <div className="flex items-center gap-2">
+                                <p className="font-semibold text-gray-800 text-sm">{doctor.doctor_name}</p>
+                                {rank <= 3 && <span className="text-xs">{rank === 1 ? '🥇' : rank === 2 ? '🥈' : '🥉'}</span>}
+                              </div>
+                              <p className="text-xs text-gray-500">{(doctor.patient_count ?? doctor.rating_count) || 0} patients</p>
                             </div>
                           </div>
-                          <div className={`px-2 py-1 rounded-lg text-xs font-bold ${getRatingBg(rating)}`}>
-                            {rating.toFixed(1)}
+                          <div className="flex flex-col items-end gap-1">
+                            <div className={`px-2 py-1 rounded-lg text-xs font-bold ${getRatingBg(rating)}`}>
+                              {rating.toFixed(1)}
+                            </div>
+                            {badge && (
+                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${badge.color} ${badge.text}`}>
+                                {badge.label}
+                              </span>
+                            )}
                           </div>
                         </div>
                         
@@ -2306,21 +2635,60 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
                               rating >= 3.5 ? 'bg-blue-500' :
                               rating >= 2.5 ? 'bg-amber-500' : 'bg-red-500'
                             }`}
-                            style={{ width: `${percentage}%` }}
+                            style={{ width: percentage > 0 ? `${percentage}%` : '0%' }}
                           />
                         </div>
                         
-                        {questionKeys.length > 0 && (
-                          <div className="space-y-1 pt-2 border-t border-gray-100">
-                            {questionKeys.map((qKey) => (
-                              <div key={qKey} className="flex items-center justify-between py-0.5">
-                                <span className="text-xs text-gray-600 truncate flex-1">{qKey}</span>
-                                <div className="flex items-center gap-1 ml-2">
-                                  <StarRating value={questionRatings[qKey]} size="xs" />
-                                  <span className="text-xs font-medium text-gray-600">{questionRatings[qKey].toFixed(1)}</span>
-                                </div>
-                              </div>
-                            ))}
+                        {allKeys.length > 0 && (
+                          <div className="space-y-2 pt-2 border-t border-gray-100">
+                            {allKeys.map((qKey) => {
+                              const starRating = questionRatings[qKey];
+                              const otherAnswer = questionAnswers[qKey];
+                              
+                              if (starRating !== undefined) {
+                                return (
+                                  <div key={qKey} className="flex items-center justify-between py-0.5">
+                                    <span className="text-xs text-gray-600 truncate flex-1">{qKey}</span>
+                                    <div className="flex items-center gap-1 ml-2">
+                                      <StarRating value={starRating} size="xs" />
+                                      <span className="text-xs font-medium text-gray-600">{starRating.toFixed(1)}</span>
+                                    </div>
+                                  </div>
+                                );
+                              }
+                              
+                              if (otherAnswer) {
+                                const counts = otherAnswer.counts || {};
+                                const percentages = otherAnswer.percentages || {};
+                                const total = otherAnswer.total || 0;
+                                const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+                                
+                                return (
+                                  <div key={qKey} className="py-1">
+                                    <div className="flex items-center justify-between py-0.5">
+                                      <span className="text-xs text-gray-600 truncate flex-1">{qKey}</span>
+                                    </div>
+                                    <div className="space-y-0.5 ml-1">
+                                      {entries.map(([answer, count]) => {
+                                        const percent = percentages[answer] || 0;
+                                        const isYes = answer.toLowerCase() === 'yes';
+                                        return (
+                                          <div key={answer} className="flex items-center justify-between">
+                                            <span className={`text-xs font-medium ${isYes ? 'text-emerald-600' : 'text-red-600'}`}>{answer}</span>
+                                            <div className="flex items-center gap-1">
+                                              <span className="text-xs text-gray-500">{count}</span>
+                                              <span className="text-xs text-gray-400">({percent}%)</span>
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                );
+                              }
+                              
+                              return null;
+                            })}
                           </div>
                         )}
                       </div>
