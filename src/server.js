@@ -1043,7 +1043,7 @@ app.get('/api/doctor-ratings', requireAuth, async function (req, res) {
     const whereClause = whereConditions.length > 0 ? 'WHERE ' + whereConditions.join(' AND ') : '';
 
     const doctorQuestions = await db.query(
-      `SELECT id, question_key, label, type FROM survey_questions WHERE category = 'doctor' AND is_active = TRUE AND is_deleted = FALSE`
+      `SELECT id, question_key, label, type FROM survey_questions WHERE category = 'doctor' AND is_active = TRUE AND is_deleted = FALSE ORDER BY page_number ASC, order_no ASC, id ASC`
     );
 
     const submissions = await db.query(`
@@ -1198,9 +1198,14 @@ app.get('/api/doctor-ratings', requireAuth, async function (req, res) {
       }
     }
 
+    const orderedQuestions = doctorQuestions.rows || [];
+    const questionKeyOrder = new Map(orderedQuestions.map((q, idx) => [q.question_key, idx]));
+    
     let ratings = Object.values(doctorStats).map(d => {
+      const qKeyOrder = new Map([...questionKeyOrder].map(([k, v]) => [k, v]));
       const questionRatingsArray = Object.values(d.question_ratings)
         .filter(qr => qr.count > 0)
+        .sort((a, b) => (qKeyOrder.get(a.question_key) ?? 999) - (qKeyOrder.get(b.question_key) ?? 999))
         .map(qr => ({
           question_key: qr.question_key,
           type: qr.type,

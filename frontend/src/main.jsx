@@ -2452,115 +2452,7 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
                     : '0.0'}
                 </p>
               </div>
-            </div>
-
-            {(analytics?.question_breakdown?.length > 0 || analytics?.yesno_breakdown?.length > 0) && (
-              <div className="space-y-6">
-{analytics?.star_rating_breakdown?.length > 0 && (
-                  <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
-                    <h3 className="text-lg font-bold text-gray-800 mb-6 flex items-center gap-2">
-                      <div className="w-8 h-8 bg-gradient-to-br from-blue-400 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg">
-                        <Star className="w-4 h-4 text-white" />
-                      </div>
-                      General Questions - Average Rating
-                    </h3>
-                    
-                    <div className="space-y-6">
-                      {analytics.star_rating_breakdown.map((q) => {
-                        const avg = q.average || 0;
-                        const percentage = (avg / 5) * 100;
-                        let color = '#ef4444';
-                        if (avg >= 4) color = '#10b981';
-                        else if (avg >= 3) color = '#f59e0b';
-                        
-                        return (
-                          <div key={q.question_key}>
-                            <div className="flex items-center justify-between mb-2">
-                              <span className="font-semibold text-gray-800">{q.question_key}</span>
-                              <span className="font-bold text-lg" style={{ color }}>{avg.toFixed(1)} / 5</span>
-                            </div>
-                            <div className="w-full bg-gray-200 rounded-full h-4 overflow-hidden">
-                              <div 
-                                className="h-full rounded-full transition-all duration-500"
-                                style={{ 
-                                  width: `${percentage}%`,
-                                  backgroundColor: color
-                                }}
-                              />
-                            </div>
-                            <div className="flex justify-between mt-1 text-xs text-gray-500">
-                              <span>0</span>
-                              <span>1</span>
-                              <span>2</span>
-                              <span>3</span>
-                              <span>4</span>
-                              <span>5</span>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-                
-                {analytics?.yesno_breakdown?.length > 0 && analytics.yesno_breakdown.map((yn) => (
-                  <div key={yn.question_key} className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
-                    <div className="flex items-center justify-between mb-4">
-                      <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
-                        <div className="w-8 h-8 bg-gradient-to-br from-emerald-400 to-teal-600 rounded-xl flex items-center justify-center shadow-lg">
-                          <Check className="w-4 h-4 text-white" />
-                        </div>
-                        {yn.question_key}
-                      </h3>
-                    </div>
-                    
-                    <div className="flex items-center justify-center gap-8">
-                      <ResponsiveContainer width={200} height={200}>
-                        <PieChart>
-                          <Pie
-                            data={[
-                              { name: 'Yes', value: yn.yes, color: '#10b981' },
-                              { name: 'No', value: yn.no, color: '#ef4444' }
-                            ]}
-                            cx="50%"
-                            cy="50%"
-                            innerRadius={50}
-                            outerRadius={80}
-                            paddingAngle={2}
-                            dataKey="value"
-                          >
-                            {[
-                              { name: 'Yes', value: yn.yes, color: '#10b981' },
-                              { name: 'No', value: yn.no, color: '#ef4444' }
-                            ].map((entry, index) => (
-                              <Cell key={`cell-${index}`} fill={entry.color} />
-                            ))}
-                          </Pie>
-                          <Tooltip />
-                        </PieChart>
-                      </ResponsiveContainer>
-                      
-                      <div className="space-y-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-4 h-4 bg-emerald-500 rounded"></div>
-                          <div>
-                            <p className="text-2xl font-bold text-gray-800">{yn.yes}</p>
-                            <p className="text-sm text-gray-500">Yes ({yn.yes_percent}%)</p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <div className="w-4 h-4 bg-red-500 rounded"></div>
-                          <div>
-                            <p className="text-2xl font-bold text-gray-800">{yn.no}</p>
-                            <p className="text-sm text-gray-500">No ({yn.no_percent}%)</p>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+</div>
 
             <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
               <div className="flex items-center justify-between mb-4">
@@ -2579,9 +2471,8 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
                     const percentage = (rating / 5) * 100;
                     const questionRatings = doctor.question_ratings || {};
                     const questionAnswers = doctor.question_answers || {};
-                    const ratingKeys = Object.keys(questionRatings);
-                    const answerKeys = Object.keys(questionAnswers);
-                    const allKeys = [...new Set([...ratingKeys, ...answerKeys])];
+                    const doctorQuestionsList = questions.filter(q => q.category === 'doctor');
+                    const orderedKeys = doctorQuestionsList.map(q => q.key).filter(key => key && (questionRatings[key] !== undefined || questionAnswers[key] !== undefined));
                     const rank = index + 1;
                     const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : rank;
                     
@@ -2639,9 +2530,9 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
                           />
                         </div>
                         
-                        {allKeys.length > 0 && (
+                        {orderedKeys.length > 0 && (
                           <div className="space-y-2 pt-2 border-t border-gray-100">
-                            {allKeys.map((qKey) => {
+                            {orderedKeys.map((qKey) => {
                               const starRating = questionRatings[qKey];
                               const otherAnswer = questionAnswers[qKey];
                               
@@ -2699,6 +2590,100 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
                 <div className="text-center py-12 bg-gradient-to-br from-gray-50 to-white rounded-xl border-2 border-dashed border-gray-200">
                   <BarChart3 className="w-12 h-12 mx-auto mb-3 text-gray-300" />
                   <p className="text-gray-500 font-medium">No ratings yet</p>
+                  <p className="text-sm text-gray-400">Complete surveys to see analytics</p>
+                </div>
+              )}
+            </div>
+
+            <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+              <h3 className="text-lg font-bold text-gray-800 mb-6 flex items-center gap-2">
+                <div className="w-8 h-8 bg-gradient-to-br from-blue-400 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg">
+                  <Star className="w-4 h-4 text-white" />
+                </div>
+                General Questions - Average Rating
+              </h3>
+              
+              {(analytics?.question_breakdown?.length > 0 || analytics?.yesno_breakdown?.length > 0) ? (
+                <div className="space-y-6">
+                  {(() => {
+                    const generalQuestionsList = questions.filter(q => q.category === 'general');
+                    const orderedGeneralKeys = generalQuestionsList.map(q => q.key);
+                    const starMap = new Map((analytics?.star_rating_breakdown || []).map(q => [q.question_key, q]));
+                    const yesNoMap = new Map((analytics?.yesno_breakdown || []).map(q => [q.question_key, q]));
+                    const orderedItems = [];
+                    for (const key of orderedGeneralKeys) {
+                      if (starMap.has(key)) orderedItems.push({ type: 'star', data: starMap.get(key) });
+                      if (yesNoMap.has(key)) orderedItems.push({ type: 'yesno', data: yesNoMap.get(key) });
+                    }
+                    return orderedItems.filter(item => item.data).map((item) => {
+                      if (item.type === 'star') {
+                        const q = item.data;
+                        const avg = q.average || 0;
+                        const percentage = (avg / 5) * 100;
+                        let color = '#ef4444';
+                        if (avg >= 4) color = '#10b981';
+                        else if (avg >= 3) color = '#f59e0b';
+                        return (
+                          <div key={q.question_key}>
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="font-semibold text-gray-800">{q.question_key}</span>
+                              <span className="font-bold text-lg" style={{ color }}>{avg.toFixed(1)} / 5</span>
+                            </div>
+                            <div className="w-full bg-gray-200 rounded-full h-4 overflow-hidden">
+                              <div className="h-full rounded-full transition-all duration-500" style={{ width: `${percentage}%`, backgroundColor: color }} />
+                            </div>
+                            <div className="flex justify-between mt-1 text-xs text-gray-500">
+                              <span>0</span><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span>
+                            </div>
+                          </div>
+                        );
+                      } else {
+                        const yn = item.data;
+                        return (
+                          <div key={yn.question_key} className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="font-semibold text-gray-800">{yn.question_key}</span>
+                            </div>
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-3 h-3 bg-emerald-500 rounded"></div>
+                                  <span className="text-sm text-gray-700">Yes</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-gray-800">{yn.yes}</span>
+                                  <span className="text-sm text-gray-500">({yn.yes_percent}%)</span>
+                                </div>
+                              </div>
+                              <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                                <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${yn.yes_percent}%` }} />
+                              </div>
+                            </div>
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-3 h-3 bg-red-500 rounded"></div>
+                                  <span className="text-sm text-gray-700">No</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-gray-800">{yn.no}</span>
+                                  <span className="text-sm text-gray-500">({yn.no_percent}%)</span>
+                                </div>
+                              </div>
+                              <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                                <div className="h-full bg-red-500 rounded-full" style={{ width: `${yn.no_percent}%` }} />
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }
+                    });
+                  })()}
+                </div>
+              ) : (
+                <div className="text-center py-12 bg-gradient-to-br from-gray-50 to-white rounded-xl border-2 border-dashed border-gray-200">
+                  <BarChart3 className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+                  <p className="text-gray-500 font-medium">No data yet</p>
                   <p className="text-sm text-gray-400">Complete surveys to see analytics</p>
                 </div>
               )}
