@@ -1530,6 +1530,12 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
   }, [activeTab]);
 
   React.useEffect(() => {
+    if (activeTab === 'reports' && !reportsTab) {
+      setReportsTab('doctor-report');
+    }
+  }, [activeTab]);
+
+  React.useEffect(() => {
     if (activeTab === 'reports') {
       fetchReportDoctors();
       if (reportsTab === 'doctor-report') {
@@ -2364,7 +2370,10 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
     { id: 'doctors', label: 'Doctors', icon: Users },
     { id: 'users', label: 'User Management', icon: UserCog },
     { id: 'activity', label: 'Activity Log', icon: History },
-    { id: 'reports', label: 'Reports', icon: FileSpreadsheet }
+    { id: 'reports', label: 'Reports', icon: FileSpreadsheet, subItems: [
+      { id: 'doctor-report', label: "Doctor's Report" },
+      { id: 'general-report', label: 'General Report' }
+    ]}
   ];
 
   return (
@@ -2382,21 +2391,57 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
           </h1>
         </div>
 
-        <nav className="flex-1 p-4 space-y-2">
+        <nav className="flex-1 p-4 space-y-1">
           {menuItems.map((item) => (
-            <button
-              key={item.id}
-              onClick={() => setActiveTab(item.id)}
-              className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl transition-all ${
-                activeTab === item.id
-                  ? 'bg-gradient-to-r from-blue-500 to-indigo-600 font-semibold shadow-lg shadow-blue-500/30'
-                  : 'hover:bg-white/10'
-              }`}
-            >
-              <item.icon className="w-5 h-5" />
-              {item.label}
-              {activeTab === item.id && <ChevronRight className="w-4 h-4 ml-auto" />}
-            </button>
+            <div key={item.id}>
+              {item.subItems ? (
+                <>
+                  <button
+                    onClick={() => setActiveTab(item.id)}
+                    className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl transition-all ${
+                      activeTab === item.id
+                        ? 'bg-gradient-to-r from-blue-500 to-indigo-600 font-semibold shadow-lg shadow-blue-500/30'
+                        : 'hover:bg-white/10'
+                    }`}
+                  >
+                    <item.icon className="w-5 h-5" />
+                    {item.label}
+                    <ChevronDown className="w-4 h-4 ml-auto" />
+                  </button>
+                  {activeTab === item.id && (
+                    <div className="ml-4 mt-1 space-y-1">
+                      {item.subItems.map(sub => (
+                        <button
+                          key={sub.id}
+                          onClick={() => setReportsTab(sub.id)}
+                          className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg transition-all text-sm ${
+                            reportsTab === sub.id
+                              ? 'bg-white/20 font-semibold text-white'
+                              : 'hover:bg-white/10 text-gray-300'
+                          }`}
+                        >
+                          {sub.label}
+                          {reportsTab === sub.id && <ChevronRight className="w-4 h-4 ml-auto" />}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <button
+                  onClick={() => setActiveTab(item.id)}
+                  className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl transition-all ${
+                    activeTab === item.id
+                      ? 'bg-gradient-to-r from-blue-500 to-indigo-600 font-semibold shadow-lg shadow-blue-500/30'
+                      : 'hover:bg-white/10'
+                  }`}
+                >
+                  <item.icon className="w-5 h-5" />
+                  {item.label}
+                  {activeTab === item.id && <ChevronRight className="w-4 h-4 ml-auto" />}
+                </button>
+              )}
+            </div>
           ))}
         </nav>
 
@@ -2414,7 +2459,11 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
       <main className="flex-1 ml-64 overflow-hidden">
         <header className="bg-white border-b border-gray-200 px-8 py-4 flex items-center justify-between sticky top-0 z-30">
           <div>
-            <h2 className="text-lg font-semibold text-gray-800 capitalize">{activeTab === 'dashboard' ? 'Dashboard' : activeTab}</h2>
+            <h2 className="text-lg font-semibold text-gray-800 capitalize">
+              {activeTab === 'dashboard' ? 'Dashboard' : activeTab === 'reports' 
+                ? (reportsTab === 'doctor-report' ? "Doctor's Report" : 'General Report') 
+                : activeTab}
+            </h2>
           </div>
           <div className="flex items-center gap-4">
             <div className="relative">
@@ -3554,13 +3603,15 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
         {activeTab === 'reports' && (
           <div className="space-y-6 animate-fade-in">
             <div className="flex items-center justify-between">
-              <div className="flex gap-2">
-                <button onClick={() => setReportsTab('doctor-report')} className={`px-4 py-2 rounded-lg font-medium transition-all ${reportsTab === 'doctor-report' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
-                  Doctor's Report
-                </button>
-                <button onClick={() => setReportsTab('general-report')} className={`px-4 py-2 rounded-lg font-medium transition-all ${reportsTab === 'general-report' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
-                  General Report
-                </button>
+              <div>
+                <h2 className="text-2xl font-bold text-gray-800">
+                  {reportsTab === 'doctor-report' ? "Doctor's Report" : 'General Report'}
+                </h2>
+                <p className="text-gray-500 text-sm">
+                  {reportsTab === 'doctor-report' 
+                    ? 'Doctor-specific survey ratings and averages'
+                    : 'Hospital-wide survey ratings and averages'}
+                </p>
               </div>
             </div>
 
