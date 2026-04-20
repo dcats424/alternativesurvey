@@ -1277,7 +1277,7 @@ app.get('/api/doctor-ratings', requireAuth, async function (req, res) {
 
 app.get('/api/reports/doctors', requireAuth, async function (req, res) {
   try {
-    const doctorIdFilter = textOrEmpty(req.query.doctor_id || '');
+    const doctorNameFilter = textOrEmpty(req.query.doctor_name || '');
     const dateFrom = textOrEmpty(req.query.date_from || '');
     const dateTo = textOrEmpty(req.query.date_to || '');
 
@@ -1427,8 +1427,8 @@ app.get('/api/reports/doctors', requireAuth, async function (req, res) {
       };
     });
 
-    if (doctorIdFilter) {
-      doctorsArray = doctorsArray.filter(d => d.doctor_id === doctorIdFilter);
+    if (doctorNameFilter) {
+      doctorsArray = doctorsArray.filter(d => d.doctor_name.toLowerCase().includes(doctorNameFilter.toLowerCase()));
     }
 
     doctorsArray.sort((a, b) => a.doctor_name.localeCompare(b.doctor_name));
@@ -1521,7 +1521,7 @@ app.get('/api/reports/general', requireAuth, async function (req, res) {
 app.get('/api/reports/export-pdf', requireAuth, async function (req, res) {
   try {
     const reportType = textOrEmpty(req.query.report_type || '');
-    const doctorId = textOrEmpty(req.query.doctor_id || '');
+    const doctorName = textOrEmpty(req.query.doctor_name || '');
     const dateFrom = textOrEmpty(req.query.date_from || '');
     const dateTo = textOrEmpty(req.query.date_to || '');
 
@@ -1685,8 +1685,8 @@ app.get('/api/reports/export-pdf', requireAuth, async function (req, res) {
         };
       });
 
-      if (doctorId) {
-        doctorsArray = doctorsArray.filter(d => d.doctor_id === doctorId);
+      if (doctorName) {
+        doctorsArray = doctorsArray.filter(d => d.doctor_name.toLowerCase().includes(doctorName.toLowerCase()));
       }
 
       doctorsArray.sort((a, b) => a.doctor_name.localeCompare(b.doctor_name));

@@ -1489,7 +1489,7 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
     setReportsLoading(true);
     try {
       const params = new URLSearchParams();
-      if (reportFilters.doctor_id) params.set('doctor_id', reportFilters.doctor_id);
+      if (reportFilters.doctor_id) params.set('doctor_name', reportFilters.doctor_id);
       if (reportFilters.date_from) params.set('date_from', reportFilters.date_from);
       if (reportFilters.date_to) params.set('date_to', reportFilters.date_to);
       const res = await fetch('/api/reports/doctors?' + params.toString(), { headers: headers() });
@@ -1530,13 +1530,13 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
   }, [activeTab]);
 
   React.useEffect(() => {
-    if (activeTab === 'reports' && !reportsTab) {
+    if (activeTab === 'doctors' && !reportsTab) {
       setReportsTab('doctor-report');
     }
   }, [activeTab]);
 
   React.useEffect(() => {
-    if (activeTab === 'reports') {
+    if (activeTab === 'doctors' && (reportsTab === 'doctor-report' || reportsTab === 'general-report')) {
       fetchReportDoctors();
       if (reportsTab === 'doctor-report') {
         fetchDoctorReport();
@@ -2259,7 +2259,7 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
   async function exportDoctorReportToPDF() {
     try {
       const params = new URLSearchParams({ report_type: 'doctor' });
-      if (reportFilters.doctor_id) params.set('doctor_id', reportFilters.doctor_id);
+      if (reportFilters.doctor_id) params.set('doctor_name', reportFilters.doctor_id);
       if (reportFilters.date_from) params.set('date_from', reportFilters.date_from);
       if (reportFilters.date_to) params.set('date_to', reportFilters.date_to);
       const res = await fetch('/api/reports/export-pdf?' + params.toString(), { headers: headers() });
@@ -2367,13 +2367,13 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
     { id: 'questions', label: 'Questions', icon: FileText },
     { id: 'responses', label: 'Responses', icon: MessageSquare },
     { id: 'doctor-ratings', label: 'Doctor Ratings', icon: Star },
-    { id: 'doctors', label: 'Doctors', icon: Users },
-    { id: 'users', label: 'User Management', icon: UserCog },
-    { id: 'activity', label: 'Activity Log', icon: History },
-    { id: 'reports', label: 'Reports', icon: FileSpreadsheet, subItems: [
+    { id: 'doctors', label: 'Doctors', icon: Users, subItems: [
+      { id: 'doctors-list', label: 'All Doctors' },
       { id: 'doctor-report', label: "Doctor's Report" },
       { id: 'general-report', label: 'General Report' }
-    ]}
+    ]},
+    { id: 'users', label: 'User Management', icon: UserCog },
+    { id: 'activity', label: 'Activity Log', icon: History }
   ];
 
   return (
@@ -3600,7 +3600,7 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
           </div>
         )}
 
-        {activeTab === 'reports' && (
+        {activeTab === 'doctors' && (reportsTab === 'doctor-report' || reportsTab === 'general-report') && (
           <div className="space-y-6 animate-fade-in">
             <div className="flex items-center justify-between">
               <div>
@@ -3619,11 +3619,14 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
               <div className="flex flex-wrap items-center gap-4">
                 {reportsTab === 'doctor-report' && (
                   <div className="flex items-center gap-2">
-                    <label className="text-sm font-medium text-gray-600">Doctor:</label>
-                    <select value={reportFilters.doctor_id} onChange={(e) => setReportFilters({ ...reportFilters, doctor_id: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                      <option value="">All Doctors</option>
-                      {reportDoctors.map(d => (<option key={d.id} value={d.id}>{d.name}</option>))}
-                    </select>
+                    <Search className="w-4 h-4 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Search doctor name..."
+                      value={reportFilters.doctor_id}
+                      onChange={(e) => setReportFilters({ ...reportFilters, doctor_id: e.target.value })}
+                      className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-48"
+                    />
                   </div>
                 )}
                 <div className="flex items-center gap-2">
@@ -3657,16 +3660,36 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
                 <div className="p-8 text-center"><div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto"></div><p className="text-gray-500 mt-2">Loading...</p></div>
               ) : reportsTab === 'doctor-report' ? (
                 doctorReportData.length === 0 ? <div className="p-8 text-center text-gray-500">No data available</div> :
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-gray-50 border-b border-gray-200">
-                      <tr><th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">No.</th><th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Doctor Name</th><th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Question Key</th><th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Average Score</th><th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Total Average Rating</th></tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {(() => { let idx = 1; return doctorReportData.map(doctor => doctor.question_ratings.map(qr => (<tr key={doctor.doctor_id + '-' + qr.question_key} className="hover:bg-gray-50"><td className="px-4 py-3 text-sm text-gray-800">{idx++}</td><td className="px-4 py-3 text-sm text-gray-800 font-medium">{doctor.doctor_name}</td><td className="px-4 py-3 text-sm text-gray-600">{qr.question_key}</td><td className="px-4 py-3 text-sm text-gray-800">{qr.average.toFixed(1)}</td><td className="px-4 py-3 text-sm text-gray-800 font-medium">{doctor.total_average.toFixed(1)}</td></tr>))); })()}
-                    </tbody>
-                  </table>
-                </div>
+                (() => {
+                  const allQuestionKeys = [...new Set(doctorReportData.flatMap(d => d.question_ratings.map(q => q.question_key)))].sort();
+                  return (
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead className="bg-gray-50 border-b border-gray-200">
+                          <tr>
+                            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">No.</th>
+                            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Doctor Name</th>
+                            {allQuestionKeys.map(qk => (<th key={qk} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">{qk}</th>))}
+                            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Total Average</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {doctorReportData.map((doctor, idx) => (
+                            <tr key={doctor.doctor_id} className="hover:bg-gray-50">
+                              <td className="px-4 py-3 text-sm text-gray-800">{idx + 1}</td>
+                              <td className="px-4 py-3 text-sm text-gray-800 font-medium">{doctor.doctor_name}</td>
+                              {allQuestionKeys.map(qk => {
+                                const qr = doctor.question_ratings.find(q => q.question_key === qk);
+                                return <td key={qk} className="px-4 py-3 text-sm text-gray-800">{qr ? qr.average.toFixed(1) : '-'}</td>;
+                              })}
+                              <td className="px-4 py-3 text-sm text-gray-800 font-medium">{doctor.total_average.toFixed(1)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })()
               ) : (
                 generalReportData.length === 0 ? <div className="p-8 text-center text-gray-500">No data available</div> :
                 <div className="overflow-x-auto">
