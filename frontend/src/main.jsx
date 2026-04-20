@@ -2367,8 +2367,8 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
     { id: 'questions', label: 'Questions', icon: FileText },
     { id: 'responses', label: 'Responses', icon: MessageSquare },
     { id: 'doctor-ratings', label: 'Doctor Ratings', icon: Star },
-    { id: 'doctors', label: 'Doctors', icon: Users, subItems: [
-      { id: 'doctors-list', label: 'All Doctors' },
+    { id: 'doctors', label: 'Doctors', icon: Users },
+    { id: 'reports', label: 'Reports', icon: FileSpreadsheet, subItems: [
       { id: 'doctor-report', label: "Doctor's Report" },
       { id: 'general-report', label: 'General Report' }
     ]},
@@ -3692,16 +3692,33 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
                 })()
               ) : (
                 generalReportData.length === 0 ? <div className="p-8 text-center text-gray-500">No data available</div> :
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-gray-50 border-b border-gray-200">
-                      <tr><th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">No.</th><th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Question Key</th><th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Average Rating</th></tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {generalReportData.map((q, idx) => (<tr key={q.question_key} className="hover:bg-gray-50"><td className="px-4 py-3 text-sm text-gray-800">{idx + 1}</td><td className="px-4 py-3 text-sm text-gray-800 font-medium">{q.question_key}</td><td className="px-4 py-3 text-sm text-gray-800">{q.average.toFixed(1)}</td></tr>))}
-                    </tbody>
-                  </table>
-                </div>
+                (() => {
+                  const allQuestionKeys = [...new Set(generalReportData.map(d => d.question_key))].sort();
+                  const avgValues = {};
+                  allQuestionKeys.forEach(qk => {
+                    const items = generalReportData.filter(d => d.question_key === qk);
+                    const total = items.reduce((sum, d) => sum + (d.average || 0), 0);
+                    avgValues[qk] = items.length > 0 ? total / items.length : 0;
+                  });
+                  return (
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead className="bg-gray-50 border-b border-gray-200">
+                          <tr>
+                            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">No.</th>
+                            {allQuestionKeys.map(qk => (<th key={qk} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">{qk}</th>))}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          <tr className="hover:bg-gray-50">
+                            <td className="px-4 py-3 text-sm text-gray-800 font-medium">Average</td>
+                            {allQuestionKeys.map(qk => (<td key={qk} className="px-4 py-3 text-sm text-gray-800">{avgValues[qk].toFixed(1)}</td>))}
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })()
               )}
             </div>
           </div>
