@@ -7,6 +7,7 @@ const { sendSms } = require('./services/sms');
 const { sendEmail } = require('./services/email');
 const doctorsService = require('./services/doctors');
 const surveyService = require('./services/survey');
+const { generateReportPDF } = require('./services/pdf');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -1269,6 +1270,543 @@ app.get('/api/doctor-ratings', requireAuth, async function (req, res) {
     }));
 
     return res.json({ ratings });
+  } catch (e) {
+    return res.status(500).json({ error: 'fetch_failed', details: e.message });
+  }
+});
+
+app.get('/api/reports/doctors', requireAuth, async function (req, res) {
+  try {
+    const doctorIdFilter = textOrEmpty(req.query.doctor_id || '');
+    const dateFrom = textOrEmpty(req.query.date_from || '');
+    const dateTo = textOrEmpty(req.query.date_to || '');
+
+    let whereConditions = [];
+    let params = [];
+    let paramIdx = 1;
+
+    if (dateFrom) {
+      whereConditions.push(`submitted_at >= $${paramIdx++}`);
+      params.push(dateFrom);
+    }
+
+    if (dateTo) {
+      whereConditions.push(`submitted_at <= $${paramIdx++}`);
+      params.push(dateTo + ' 23:59:59');
+    }
+
+    const whereClause = whereConditions.length > 0 ? 'WHERE ' + whereConditions.join(' AND ') : '';
+
+    const doctorQuestions = await db.query(
+      `SELECT id, question_key, label, type FROM survey_questions WHERE category = 'doctor' AND is_active = TRUE AND is_deleted = FALSE ORDER BY page_number ASC, order_no ASC, id ASC`
+    );
+
+    const submissions = await db.query(`
+      SELECT id, patient_name, selected_doctor_ids, selected_doctor_names, question_answers, submitted_at
+      FROM feedback_submissions
+      ${whereClause}
+      ORDER BY submitted_at DESC
+    `, params);
+
+    const doctorStats = {};
+
+    for (const sub of submissions.rows) {
+      const qa = sub.question_answers || {};
+      const doctorIdsList = sub.selected_doctor_ids || [];
+      const doctorNamesList = sub.selected_doctor_names || [];
+
+      const allKeys = Object.keys(qa);
+      const doctorIdsInOrder = [];
+      const seenIds = new Set();
+
+      for (const key of allKeys) {
+        if (key.startsWith('doctor_')) {
+          const match = key.match(/^doctor_([^_]+)_(.+)$/);
+          if (match) {
+            const doctorId = match[1];
+            if (!seenIds.has(doctorId)) {
+              seenIds.add(doctorId);
+              doctorIdsInOrder.push(doctorId);
+            }
+          }
+        }
+      }
+
+      const localIdToNameMap = {};
+      if (doctorIdsList.length > 0 && doctorIdsList.length === doctorNamesList.length) {
+        for (let i = 0; i < doctorIdsList.length; i++) {
+          localIdToNameMap[doctorIdsList[i]] = doctorNamesList[i];
+        }
+      } else {
+        for (let i = 0; i < doctorIdsInOrder.length; i++) {
+          localIdToNameMap[doctorIdsInOrder[i]] = doctorNamesList[i] || doctorIdsInOrder[i];
+        }
+      }
+
+      const doctorRatingsInSubmission = {};
+
+      for (const dq of doctorQuestions.rows) {
+        const questionKey = dq.question_key || String(dq.id);
+        for (const doctorId of doctorIdsInOrder) {
+          const answerKey = `doctor_${doctorId}_${questionKey}`;
+          const answerValue = qa[answerKey];
+
+          if (answerValue !== undefined && answerValue !== null) {
+            if (!doctorRatingsInSubmission[doctorId]) {
+              doctorRatingsInSubmission[doctorId] = { total: 0, count: 0, questions: {} };
+            }
+
+            const numericValue = Number(answerValue);
+            if (!isNaN(numericValue) && numericValue >= 1 && numericValue <= 5) {
+              if (!doctorRatingsInSubmission[doctorId].questions[questionKey]) {
+                doctorRatingsInSubmission[doctorId].questions[questionKey] = {
+                  total: 0,
+                  count: 0
+                };
+              }
+              doctorRatingsInSubmission[doctorId].questions[questionKey].total += numericValue;
+              doctorRatingsInSubmission[doctorId].questions[questionKey].count++;
+              doctorRatingsInSubmission[doctorId].total += numericValue;
+              doctorRatingsInSubmission[doctorId].count++;
+            }
+          }
+        }
+      }
+
+      for (const doctorId of Object.keys(doctorRatingsInSubmission)) {
+        const docData = doctorRatingsInSubmission[doctorId];
+
+        if (!doctorStats[doctorId]) {
+          let doctorName = localIdToNameMap[doctorId] || doctorId;
+          if (!doctorName.match(/^dr\.?\s/i)) {
+            doctorName = 'Dr. ' + doctorName;
+          }
+
+          doctorStats[doctorId] = {
+            doctor_id: doctorId,
+            doctor_name: doctorName,
+            patient_count: 0,
+            total_patient_avg: 0,
+            question_ratings: {}
+          };
+        }
+
+        const patientAvg = docData.count > 0 ? docData.total / docData.count : 0;
+        doctorStats[doctorId].patient_count++;
+        doctorStats[doctorId].total_patient_avg += patientAvg;
+
+        for (const [qKey, qData] of Object.entries(docData.questions)) {
+          if (!doctorStats[doctorId].question_ratings[qKey]) {
+            doctorStats[doctorId].question_ratings[qKey] = {
+              question_key: qKey,
+              total: 0,
+              count: 0
+            };
+          }
+          doctorStats[doctorId].question_ratings[qKey].total += qData.total || 0;
+          doctorStats[doctorId].question_ratings[qKey].count += qData.count;
+        }
+      }
+    }
+
+    let doctorsArray = Object.values(doctorStats).map(d => {
+      const questionRatingsArray = Object.values(d.question_ratings)
+        .filter(qr => qr.count > 0)
+        .map(qr => ({
+          question_key: qr.question_key,
+          average: qr.count > 0 ? qr.total / qr.count : 0,
+          count: qr.count
+        }));
+
+      return {
+        doctor_id: d.doctor_id,
+        doctor_name: d.doctor_name,
+        question_ratings: questionRatingsArray,
+        total_average: d.patient_count > 0 ? d.total_patient_avg / d.patient_count : 0,
+        total_patients: d.patient_count
+      };
+    });
+
+    if (doctorIdFilter) {
+      doctorsArray = doctorsArray.filter(d => d.doctor_id === doctorIdFilter);
+    }
+
+    doctorsArray.sort((a, b) => a.doctor_name.localeCompare(b.doctor_name));
+
+    return res.json({
+      doctors: doctorsArray,
+      date_from: dateFrom || null,
+      date_to: dateTo || null
+    });
+  } catch (e) {
+    return res.status(500).json({ error: 'fetch_failed', details: e.message });
+  }
+});
+
+app.get('/api/reports/general', requireAuth, async function (req, res) {
+  try {
+    const dateFrom = textOrEmpty(req.query.date_from || '');
+    const dateTo = textOrEmpty(req.query.date_to || '');
+
+    let whereConditions = [];
+    let params = [];
+    let paramIdx = 1;
+
+    if (dateFrom) {
+      whereConditions.push(`submitted_at >= $${paramIdx++}`);
+      params.push(dateFrom);
+    }
+
+    if (dateTo) {
+      whereConditions.push(`submitted_at <= $${paramIdx++}`);
+      params.push(dateTo + ' 23:59:59');
+    }
+
+    const whereClause = whereConditions.length > 0 ? 'WHERE ' + whereConditions.join(' AND ') : '';
+
+    const generalQuestions = await db.query(
+      `SELECT id, question_key, label, type FROM survey_questions WHERE category = 'general' AND is_active = TRUE AND is_deleted = FALSE ORDER BY page_number ASC, order_no ASC, id ASC`
+    );
+
+    const submissions = await db.query(`
+      SELECT id, question_answers, submitted_at
+      FROM feedback_submissions
+      ${whereClause}
+      ORDER BY submitted_at DESC
+    `, params);
+
+    const questionStats = {};
+
+    for (const gq of generalQuestions.rows) {
+      const questionKey = gq.question_key || String(gq.id);
+      questionStats[questionKey] = {
+        question_key: questionKey,
+        total: 0,
+        count: 0
+      };
+    }
+
+    for (const sub of submissions.rows) {
+      const qa = sub.question_answers || {};
+
+      for (const [key, value] of Object.entries(qa)) {
+        if (questionStats[key]) {
+          const numericValue = Number(value);
+          if (!isNaN(numericValue) && numericValue >= 1 && numericValue <= 5) {
+            questionStats[key].total += numericValue;
+            questionStats[key].count++;
+          }
+        }
+      }
+    }
+
+    const questionsArray = Object.values(questionStats)
+      .filter(q => q.count > 0)
+      .map(q => ({
+        question_key: q.question_key,
+        average: q.count > 0 ? q.total / q.count : 0,
+        count: q.count
+      }));
+
+    return res.json({
+      questions: questionsArray,
+      date_from: dateFrom || null,
+      date_to: dateTo || null
+    });
+  } catch (e) {
+    return res.status(500).json({ error: 'fetch_failed', details: e.message });
+  }
+});
+
+app.get('/api/reports/export-pdf', requireAuth, async function (req, res) {
+  try {
+    const reportType = textOrEmpty(req.query.report_type || '');
+    const doctorId = textOrEmpty(req.query.doctor_id || '');
+    const dateFrom = textOrEmpty(req.query.date_from || '');
+    const dateTo = textOrEmpty(req.query.date_to || '');
+
+    if (!reportType || (reportType !== 'doctor' && reportType !== 'general')) {
+      return res.status(400).json({ error: 'invalid_report_type' });
+    }
+
+    let rows = [];
+    let columns = [];
+
+    if (reportType === 'doctor') {
+      columns = ['No.', 'Doctor Name', 'Question Key', 'Average Score', 'Total Average Rating'];
+
+      let whereConditions = [];
+      let params = [];
+      let paramIdx = 1;
+
+      if (dateFrom) {
+        whereConditions.push(`submitted_at >= $${paramIdx++}`);
+        params.push(dateFrom);
+      }
+
+      if (dateTo) {
+        whereConditions.push(`submitted_at <= $${paramIdx++}`);
+        params.push(dateTo + ' 23:59:59');
+      }
+
+      if (doctorId) {
+        whereConditions.push(`submitted_at >= submitted_at`);
+      }
+
+      const whereClause = whereConditions.length > 0 ? 'WHERE ' + whereConditions.join(' AND ') : '';
+
+      const doctorQuestions = await db.query(
+        `SELECT id, question_key, label, type FROM survey_questions WHERE category = 'doctor' AND is_active = TRUE AND is_deleted = FALSE ORDER BY page_number ASC, order_no ASC, id ASC`
+      );
+
+      const submissions = await db.query(`
+        SELECT id, patient_name, selected_doctor_ids, selected_doctor_names, question_answers, submitted_at
+        FROM feedback_submissions
+        ${whereClause}
+        ORDER BY submitted_at DESC
+      `, params);
+
+      const doctorStats = {};
+
+      for (const sub of submissions.rows) {
+        const qa = sub.question_answers || {};
+        const doctorIdsList = sub.selected_doctor_ids || [];
+        const doctorNamesList = sub.selected_doctor_names || [];
+
+        const allKeys = Object.keys(qa);
+        const doctorIdsInOrder = [];
+        const seenIds = new Set();
+
+        for (const key of allKeys) {
+          if (key.startsWith('doctor_')) {
+            const match = key.match(/^doctor_([^_]+)_(.+)$/);
+            if (match) {
+              const doctorIdMatch = match[1];
+              if (!seenIds.has(doctorIdMatch)) {
+                seenIds.add(doctorIdMatch);
+                doctorIdsInOrder.push(doctorIdMatch);
+              }
+            }
+          }
+        }
+
+        const localIdToNameMap = {};
+        if (doctorIdsList.length > 0 && doctorIdsList.length === doctorNamesList.length) {
+          for (let i = 0; i < doctorIdsList.length; i++) {
+            localIdToNameMap[doctorIdsList[i]] = doctorNamesList[i];
+          }
+        } else {
+          for (let i = 0; i < doctorIdsInOrder.length; i++) {
+            localIdToNameMap[doctorIdsInOrder[i]] = doctorNamesList[i] || doctorIdsInOrder[i];
+          }
+        }
+
+        const doctorRatingsInSubmission = {};
+
+        for (const dq of doctorQuestions.rows) {
+          const questionKey = dq.question_key || String(dq.id);
+          for (const docId of doctorIdsInOrder) {
+            const answerKey = `doctor_${docId}_${questionKey}`;
+            const answerValue = qa[answerKey];
+
+            if (answerValue !== undefined && answerValue !== null) {
+              if (!doctorRatingsInSubmission[docId]) {
+                doctorRatingsInSubmission[docId] = { total: 0, count: 0, questions: {} };
+              }
+
+              const numericValue = Number(answerValue);
+              if (!isNaN(numericValue) && numericValue >= 1 && numericValue <= 5) {
+                if (!doctorRatingsInSubmission[docId].questions[questionKey]) {
+                  doctorRatingsInSubmission[docId].questions[questionKey] = {
+                    total: 0,
+                    count: 0
+                  };
+                }
+                doctorRatingsInSubmission[docId].questions[questionKey].total += numericValue;
+                doctorRatingsInSubmission[docId].questions[questionKey].count++;
+                doctorRatingsInSubmission[docId].total += numericValue;
+                doctorRatingsInSubmission[docId].count++;
+              }
+            }
+          }
+        }
+
+        for (const docId of Object.keys(doctorRatingsInSubmission)) {
+          const docData = doctorRatingsInSubmission[docId];
+
+          if (!doctorStats[docId]) {
+            let doctorName = localIdToNameMap[docId] || docId;
+            if (!doctorName.match(/^dr\.?\s/i)) {
+              doctorName = 'Dr. ' + doctorName;
+            }
+
+            doctorStats[docId] = {
+              doctor_id: docId,
+              doctor_name: doctorName,
+              patient_count: 0,
+              total_patient_avg: 0,
+              question_ratings: {}
+            };
+          }
+
+          const patientAvg = docData.count > 0 ? docData.total / docData.count : 0;
+          doctorStats[docId].patient_count++;
+          doctorStats[docId].total_patient_avg += patientAvg;
+
+          for (const [qKey, qData] of Object.entries(docData.questions)) {
+            if (!doctorStats[docId].question_ratings[qKey]) {
+              doctorStats[docId].question_ratings[qKey] = {
+                question_key: qKey,
+                total: 0,
+                count: 0
+              };
+            }
+            doctorStats[docId].question_ratings[qKey].total += qData.total || 0;
+            doctorStats[docId].question_ratings[qKey].count += qData.count;
+          }
+        }
+      }
+
+      let doctorsArray = Object.values(doctorStats).map(d => {
+        const questionRatingsArray = Object.values(d.question_ratings)
+          .filter(qr => qr.count > 0)
+          .map(qr => ({
+            question_key: qr.question_key,
+            average: qr.count > 0 ? qr.total / qr.count : 0,
+            count: qr.count
+          }));
+
+        return {
+          doctor_id: d.doctor_id,
+          doctor_name: d.doctor_name,
+          question_ratings: questionRatingsArray,
+          total_average: d.patient_count > 0 ? d.total_patient_avg / d.patient_count : 0,
+          total_patients: d.patient_count
+        };
+      });
+
+      if (doctorId) {
+        doctorsArray = doctorsArray.filter(d => d.doctor_id === doctorId);
+      }
+
+      doctorsArray.sort((a, b) => a.doctor_name.localeCompare(b.doctor_name));
+
+      let rowNum = 0;
+      for (const doctor of doctorsArray) {
+        for (const qr of doctor.question_ratings) {
+          rowNum++;
+          rows.push([
+            rowNum,
+            doctor.doctor_name,
+            qr.question_key,
+            qr.average.toFixed(2),
+            doctor.total_average.toFixed(2)
+          ]);
+        }
+      }
+    } else {
+      columns = ['No.', 'Question Key', 'Average Rating'];
+
+      let whereConditions = [];
+      let params = [];
+      let paramIdx = 1;
+
+      if (dateFrom) {
+        whereConditions.push(`submitted_at >= $${paramIdx++}`);
+        params.push(dateFrom);
+      }
+
+      if (dateTo) {
+        whereConditions.push(`submitted_at <= $${paramIdx++}`);
+        params.push(dateTo + ' 23:59:59');
+      }
+
+      const whereClause = whereConditions.length > 0 ? 'WHERE ' + whereConditions.join(' AND ') : '';
+
+      const generalQuestions = await db.query(
+        `SELECT id, question_key, label, type FROM survey_questions WHERE category = 'general' AND is_active = TRUE AND is_deleted = FALSE ORDER BY page_number ASC, order_no ASC, id ASC`
+      );
+
+      const submissions = await db.query(`
+        SELECT id, question_answers, submitted_at
+        FROM feedback_submissions
+        ${whereClause}
+        ORDER BY submitted_at DESC
+      `, params);
+
+      const questionStats = {};
+
+      for (const gq of generalQuestions.rows) {
+        const questionKey = gq.question_key || String(gq.id);
+        questionStats[questionKey] = {
+          question_key: questionKey,
+          total: 0,
+          count: 0
+        };
+      }
+
+      for (const sub of submissions.rows) {
+        const qa = sub.question_answers || {};
+
+        for (const [key, value] of Object.entries(qa)) {
+          if (questionStats[key]) {
+            const numericValue = Number(value);
+            if (!isNaN(numericValue) && numericValue >= 1 && numericValue <= 5) {
+              questionStats[key].total += numericValue;
+              questionStats[key].count++;
+            }
+          }
+        }
+      }
+
+      const questionsArray = Object.values(questionStats)
+        .filter(q => q.count > 0)
+        .map(q => ({
+          question_key: q.question_key,
+          average: q.count > 0 ? q.total / q.count : 0,
+          count: q.count
+        }));
+
+      let rowNum = 0;
+      for (const question of questionsArray) {
+        rowNum++;
+        rows.push([
+          rowNum,
+          question.question_key,
+          question.average.toFixed(2)
+        ]);
+      }
+    }
+
+    const pdfBuffer = await generateReportPDF({
+      reportType,
+      dateFrom,
+      dateTo,
+      rows,
+      columns
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${reportType}-report.pdf"`);
+    res.send(pdfBuffer);
+  } catch (e) {
+    console.error('PDF export error:', e);
+    return res.status(500).json({ error: 'export_failed', details: e.message });
+  }
+});
+
+app.get('/api/doctors/all', requireAuth, async function (req, res) {
+  try {
+    const result = await db.query(
+      `SELECT id, name FROM doctors WHERE is_deleted = FALSE ORDER BY name ASC`
+    );
+
+    const doctors = result.rows.map(r => ({
+      id: r.id,
+      name: r.name
+    }));
+
+    return res.json({ doctors });
   } catch (e) {
     return res.status(500).json({ error: 'fetch_failed', details: e.message });
   }

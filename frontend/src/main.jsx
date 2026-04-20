@@ -1178,6 +1178,16 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
   const [activityLogs, setActivityLogs] = React.useState([]);
   const [activityPagination, setActivityPagination] = React.useState({ page: 1, limit: 5, total: 0, total_pages: 0 });
   const [userDeleteModal, setUserDeleteModal] = React.useState({ isOpen: false, user: null });
+  const [reportsTab, setReportsTab] = React.useState('doctor-report');
+  const [doctorReportData, setDoctorReportData] = React.useState([]);
+  const [generalReportData, setGeneralReportData] = React.useState([]);
+  const [reportDoctors, setReportDoctors] = React.useState([]);
+  const [reportFilters, setReportFilters] = React.useState({
+    doctor_id: '',
+    date_from: '',
+    date_to: ''
+  });
+  const [reportsLoading, setReportsLoading] = React.useState(false);
 
   const [filters, setFilters] = React.useState({ search: '', date_from: '', date_to: '' });
   const [searchInput, setSearchInput] = React.useState('');
@@ -1465,6 +1475,49 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
     }
   }
 
+  async function fetchReportDoctors() {
+    try {
+      const res = await fetch('/api/doctors/all', { headers: headers() });
+      const data = await res.json();
+      if (res.ok) setReportDoctors(data.doctors || []);
+    } catch (err) {
+      console.error('Failed to fetch report doctors:', err);
+    }
+  }
+
+  async function fetchDoctorReport() {
+    setReportsLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (reportFilters.doctor_id) params.set('doctor_id', reportFilters.doctor_id);
+      if (reportFilters.date_from) params.set('date_from', reportFilters.date_from);
+      if (reportFilters.date_to) params.set('date_to', reportFilters.date_to);
+      const res = await fetch('/api/reports/doctors?' + params.toString(), { headers: headers() });
+      const data = await res.json();
+      if (res.ok) setDoctorReportData(data.doctors || []);
+    } catch (err) {
+      console.error('Failed to fetch doctor report:', err);
+    } finally {
+      setReportsLoading(false);
+    }
+  }
+
+  async function fetchGeneralReport() {
+    setReportsLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (reportFilters.date_from) params.set('date_from', reportFilters.date_from);
+      if (reportFilters.date_to) params.set('date_to', reportFilters.date_to);
+      const res = await fetch('/api/reports/general?' + params.toString(), { headers: headers() });
+      const data = await res.json();
+      if (res.ok) setGeneralReportData(data.questions || []);
+    } catch (err) {
+      console.error('Failed to fetch general report:', err);
+    } finally {
+      setReportsLoading(false);
+    }
+  }
+
   function changeActivityPage(newPage) {
     if (newPage < 1 || newPage > activityPagination.total_pages) return;
     fetchActivityLogs(newPage, activityPagination.limit);
@@ -1475,6 +1528,17 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
     if (activeTab === 'activity') fetchActivityLogs();
     if (activeTab === 'doctors') fetchDoctors();
   }, [activeTab]);
+
+  React.useEffect(() => {
+    if (activeTab === 'reports') {
+      fetchReportDoctors();
+      if (reportsTab === 'doctor-report') {
+        fetchDoctorReport();
+      } else {
+        fetchGeneralReport();
+      }
+    }
+  }, [activeTab, reportsTab]);
 
   const LAST_SEEN_KEY = 'last_seen_response_id';
   const lastSeenIdRef = React.useRef(parseInt(localStorage.getItem(LAST_SEEN_KEY) || '0'));
@@ -2116,6 +2180,117 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
     URL.revokeObjectURL(url);
   }
 
+  function exportDoctorReportToExcel() {
+    const rows = [];
+    let idx = 1;
+    for (const doctor of doctorReportData) {
+      for (const qr of doctor.question_ratings) {
+        rows.push({
+          'No.': idx++,
+          'Doctor Name': doctor.doctor_name,
+          'Question Key': qr.question_key,
+          'Average Score': qr.average.toFixed(1),
+          'Total Average Rating': doctor.total_average.toFixed(1)
+        });
+      }
+    }
+    if (rows.length === 0) { showMessage('No data to export', 'error'); return; }
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Doctor Report');
+    XLSX.writeFile(wb, 'doctors_report.xlsx');
+    showMessage('Exported to Excel', 'success');
+  }
+
+  function exportGeneralReportToExcel() {
+    const rows = generalReportData.map((q, idx) => ({
+      'No.': idx + 1,
+      'Question Key': q.question_key,
+      'Average Rating': q.average.toFixed(1)
+    }));
+    if (rows.length === 0) { showMessage('No data to export', 'error'); return; }
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'General Report');
+    XLSX.writeFile(wb, 'general_report.xlsx');
+    showMessage('Exported to Excel', 'success');
+  }
+
+  function exportDoctorReportToCSV() {
+    const rows = [];
+    let idx = 1;
+    for (const doctor of doctorReportData) {
+      for (const qr of doctor.question_ratings) {
+        rows.push({
+          'No.': idx++,
+          'Doctor Name': doctor.doctor_name,
+          'Question Key': qr.question_key,
+          'Average Score': qr.average.toFixed(1),
+          'Total Average Rating': doctor.total_average.toFixed(1)
+        });
+      }
+    }
+    if (rows.length === 0) { showMessage('No data to export', 'error'); return; }
+    const headers = Object.keys(rows[0]);
+    const csv = [headers.join(','), ...rows.map(r => headers.map(h => '"' + String(r[h] || '').replace(/"/g, '""') + '"').join(','))].join('\n');
+    downloadFile(csv, 'doctors_report.csv', 'text/csv');
+    showMessage('Exported to CSV', 'success');
+  }
+
+  function exportGeneralReportToCSV() {
+    const rows = generalReportData.map((q, idx) => ({
+      'No.': idx + 1,
+      'Question Key': q.question_key,
+      'Average Rating': q.average.toFixed(1)
+    }));
+    if (rows.length === 0) { showMessage('No data to export', 'error'); return; }
+    const headers = Object.keys(rows[0]);
+    const csv = [headers.join(','), ...rows.map(r => headers.map(h => '"' + String(r[h] || '').replace(/"/g, '""') + '"').join(','))].join('\n');
+    downloadFile(csv, 'general_report.csv', 'text/csv');
+    showMessage('Exported to CSV', 'success');
+  }
+
+  async function exportDoctorReportToPDF() {
+    try {
+      const params = new URLSearchParams({ report_type: 'doctor' });
+      if (reportFilters.doctor_id) params.set('doctor_id', reportFilters.doctor_id);
+      if (reportFilters.date_from) params.set('date_from', reportFilters.date_from);
+      if (reportFilters.date_to) params.set('date_to', reportFilters.date_to);
+      const res = await fetch('/api/reports/export-pdf?' + params.toString(), { headers: headers() });
+      if (!res.ok) throw new Error('Export failed');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'doctors_report.pdf';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showMessage('Exported to PDF', 'success');
+    } catch (err) { showMessage('PDF export failed: ' + err.message, 'error'); }
+  }
+
+  async function exportGeneralReportToPDF() {
+    try {
+      const params = new URLSearchParams({ report_type: 'general' });
+      if (reportFilters.date_from) params.set('date_from', reportFilters.date_from);
+      if (reportFilters.date_to) params.set('date_to', reportFilters.date_to);
+      const res = await fetch('/api/reports/export-pdf?' + params.toString(), { headers: headers() });
+      if (!res.ok) throw new Error('Export failed');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'general_report.pdf';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showMessage('Exported to PDF', 'success');
+    } catch (err) { showMessage('PDF export failed: ' + err.message, 'error'); }
+  }
+
   function toggleSelectAll() {
     if (selectedIds.size === responses.length) {
       setSelectedIds(new Set());
@@ -2188,7 +2363,8 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
     { id: 'doctor-ratings', label: 'Doctor Ratings', icon: Star },
     { id: 'doctors', label: 'Doctors', icon: Users },
     { id: 'users', label: 'User Management', icon: UserCog },
-    { id: 'activity', label: 'Activity Log', icon: History }
+    { id: 'activity', label: 'Activity Log', icon: History },
+    { id: 'reports', label: 'Reports', icon: FileSpreadsheet }
   ];
 
   return (
@@ -3371,6 +3547,88 @@ function AdminDashboard({ authToken, currentUser, onLogout }) {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'reports' && (
+          <div className="space-y-6 animate-fade-in">
+            <div className="flex items-center justify-between">
+              <div className="flex gap-2">
+                <button onClick={() => setReportsTab('doctor-report')} className={`px-4 py-2 rounded-lg font-medium transition-all ${reportsTab === 'doctor-report' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                  Doctor's Report
+                </button>
+                <button onClick={() => setReportsTab('general-report')} className={`px-4 py-2 rounded-lg font-medium transition-all ${reportsTab === 'general-report' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                  General Report
+                </button>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-xl p-4 border border-gray-200">
+              <div className="flex flex-wrap items-center gap-4">
+                {reportsTab === 'doctor-report' && (
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm font-medium text-gray-600">Doctor:</label>
+                    <select value={reportFilters.doctor_id} onChange={(e) => setReportFilters({ ...reportFilters, doctor_id: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                      <option value="">All Doctors</option>
+                      {reportDoctors.map(d => (<option key={d.id} value={d.id}>{d.name}</option>))}
+                    </select>
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <label className="text-sm font-medium text-gray-600">From:</label>
+                  <input type="date" value={reportFilters.date_from} onChange={(e) => setReportFilters({ ...reportFilters, date_from: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-sm font-medium text-gray-600">To:</label>
+                  <input type="date" value={reportFilters.date_to} onChange={(e) => setReportFilters({ ...reportFilters, date_to: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <button onClick={() => reportsTab === 'doctor-report' ? fetchDoctorReport() : fetchGeneralReport()} className="px-4 py-2 bg-blue-500 text-white rounded-lg text-sm font-medium hover:bg-blue-600">
+                  Apply Filters
+                </button>
+                <div className="relative ml-auto">
+                  <button onClick={() => setDownloadDropdown(!downloadDropdown)} className="flex items-center gap-2 px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm font-medium hover:bg-emerald-600">
+                    <Download className="w-4 h-4" />Download<ChevronDown className="w-4 h-4" />
+                  </button>
+                  {downloadDropdown && (
+                    <div className="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden z-50">
+                      <button onClick={() => { setDownloadDropdown(false); reportsTab === 'doctor-report' ? exportDoctorReportToExcel() : exportGeneralReportToExcel(); }} className="w-full px-4 py-3 text-left text-sm hover:bg-gray-50 flex items-center gap-2"><FileSpreadsheet className="w-4 h-4 text-emerald-600" />Excel (.xlsx)</button>
+                      <button onClick={() => { setDownloadDropdown(false); reportsTab === 'doctor-report' ? exportDoctorReportToCSV() : exportGeneralReportToCSV(); }} className="w-full px-4 py-3 text-left text-sm hover:bg-gray-50 flex items-center gap-2"><FileSpreadsheet className="w-4 h-4 text-blue-600" />CSV</button>
+                      <button onClick={() => { setDownloadDropdown(false); reportsTab === 'doctor-report' ? exportDoctorReportToPDF() : exportGeneralReportToPDF(); }} className="w-full px-4 py-3 text-left text-sm hover:bg-gray-50 flex items-center gap-2"><FileText className="w-4 h-4 text-red-600" />PDF</button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+              {reportsLoading ? (
+                <div className="p-8 text-center"><div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto"></div><p className="text-gray-500 mt-2">Loading...</p></div>
+              ) : reportsTab === 'doctor-report' ? (
+                doctorReportData.length === 0 ? <div className="p-8 text-center text-gray-500">No data available</div> :
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-gray-50 border-b border-gray-200">
+                      <tr><th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">No.</th><th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Doctor Name</th><th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Question Key</th><th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Average Score</th><th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Total Average Rating</th></tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {(() => { let idx = 1; return doctorReportData.map(doctor => doctor.question_ratings.map(qr => (<tr key={doctor.doctor_id + '-' + qr.question_key} className="hover:bg-gray-50"><td className="px-4 py-3 text-sm text-gray-800">{idx++}</td><td className="px-4 py-3 text-sm text-gray-800 font-medium">{doctor.doctor_name}</td><td className="px-4 py-3 text-sm text-gray-600">{qr.question_key}</td><td className="px-4 py-3 text-sm text-gray-800">{qr.average.toFixed(1)}</td><td className="px-4 py-3 text-sm text-gray-800 font-medium">{doctor.total_average.toFixed(1)}</td></tr>))); })()}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                generalReportData.length === 0 ? <div className="p-8 text-center text-gray-500">No data available</div> :
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-gray-50 border-b border-gray-200">
+                      <tr><th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">No.</th><th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Question Key</th><th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Average Rating</th></tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {generalReportData.map((q, idx) => (<tr key={q.question_key} className="hover:bg-gray-50"><td className="px-4 py-3 text-sm text-gray-800">{idx + 1}</td><td className="px-4 py-3 text-sm text-gray-800 font-medium">{q.question_key}</td><td className="px-4 py-3 text-sm text-gray-800">{q.average.toFixed(1)}</td></tr>))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         )}

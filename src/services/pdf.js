@@ -313,4 +313,139 @@ function generateDoctorReportPDF(data) {
   });
 }
 
-module.exports = { generateDoctorReportPDF };
+function generateReportPDF(data) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({
+        margin: 40,
+        size: 'A4'
+      });
+
+      const chunks = [];
+      doc.on('data', chunk => chunks.push(chunk));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+
+      const { reportType, dateFrom, dateTo, rows, columns } = data;
+      const pageW = 595;
+      const leftM = 40;
+      const rightM = 40;
+      const contentW = pageW - leftM - rightM;
+
+      const formatDate = (dateStr) => {
+        if (!dateStr) return 'All Time';
+        const [y, m, d] = dateStr.split('-');
+        return d + '/' + m + '/' + y;
+      };
+
+      const now = new Date();
+      const timestamp = now.toLocaleDateString('en-GB', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+
+      // ========== HEADER ==========
+      doc.rect(0, 0, pageW, 60).fill('#2563eb');
+
+      // Logo placeholder (left)
+      doc.fillColor('white')
+         .fontSize(10)
+         .text('girum-logo', leftM, 25);
+
+      // Hospital name (center)
+      doc.fontSize(16)
+         .font('Helvetica-Bold')
+         .text('Girum Hospital', 0, 22, { align: 'center', width: pageW });
+
+      // Timestamp (right)
+      doc.fontSize(9)
+         .font('Helvetica')
+         .text(timestamp, pageW - rightM - 80, 25, { width: 80, align: 'right' });
+
+      let y = 75;
+
+      // ========== SUB-HEADER ==========
+      const reportName = reportType === 'doctor' ? "Doctor's Report" : "General Report";
+      const dateRange = dateFrom || dateTo
+        ? `Date: ${formatDate(dateFrom || '')} to ${formatDate(dateTo || '')}`
+        : 'Date: All Time';
+
+      doc.fillColor('#111827')
+         .fontSize(14)
+         .font('Helvetica-Bold')
+         .text(reportName, leftM, y);
+
+      y += 18;
+
+      doc.fillColor('#6b7280')
+         .fontSize(10)
+         .font('Helvetica')
+         .text(dateRange, leftM, y);
+
+      y += 25;
+
+      // ========== TABLE ==========
+      const tableTop = y;
+      const colCount = columns.length;
+      const colWidth = contentW / colCount;
+      const rowHeight = 25;
+
+      // Header row - BLACK text, WHITE background (no color)
+      doc.rect(leftM, tableTop, contentW, rowHeight).fill('#ffffff').stroke('#000000');
+      doc.fillColor('#000000')
+         .fontSize(10)
+         .font('Helvetica-Bold');
+
+      columns.forEach((col, i) => {
+        const x = leftM + (i * colWidth) + 5;
+        doc.text(col, x, tableTop + 7, { width: colWidth - 10, align: 'left' });
+      });
+
+      y = tableTop + rowHeight;
+
+      // Data rows
+      doc.fontSize(9)
+         .font('Helvetica');
+
+      rows.forEach((row, rowIdx) => {
+        const isAlternate = rowIdx % 2 === 1;
+        if (isAlternate) {
+          doc.rect(leftM, y, contentW, rowHeight).fill('#f9fafb');
+        } else {
+          doc.rect(leftM, y, contentW, rowHeight).fill('#ffffff');
+        }
+        doc.stroke('#e5e7eb');
+
+        doc.fillColor('#374151');
+
+        row.forEach((cell, i) => {
+          const x = leftM + (i * colWidth) + 5;
+          const cellStr = String(cell !== undefined && cell !== null ? cell : '');
+          doc.text(cellStr, x, y + 7, { width: colWidth - 10, align: 'left' });
+        });
+
+        y += rowHeight;
+      });
+
+      // Table border
+      doc.rect(leftM, tableTop, contentW, y - tableTop).stroke('#000000');
+
+      // ========== FOOTER ==========
+      doc.moveTo(leftM, y + 20).lineTo(pageW - rightM, y + 20).stroke('#e5e7eb');
+
+      doc.fillColor('#9ca3af')
+         .fontSize(8)
+         .font('Helvetica')
+         .text('Generated from Hospital Survey Reporting System', 0, y + 30, { align: 'center', width: pageW });
+
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+module.exports = { generateDoctorReportPDF, generateReportPDF };
